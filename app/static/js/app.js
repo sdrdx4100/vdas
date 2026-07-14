@@ -661,13 +661,14 @@ function cmpSelectedIds() {
 
 async function updateCmpColumns() {
   const ids = cmpSelectedIds();
-  const sigSel = $("#cmp-signal"), xSel = $("#cmp-x");
-  const prevSig = sigSel.value, prevX = xSel.value;
-  if (!ids.length) { sigSel.innerHTML = ""; xSel.innerHTML = ""; return; }
+  const sigSel = $("#cmp-signal"), grpSel = $("#cmp-groupby");
+  if (!ids.length) { sigSel.innerHTML = ""; grpSel.innerHTML = '<option value="">なし (全体のみ)</option>'; return; }
 
   for (const id of ids) {
     if (!state.cmp.schemas[id]) state.cmp.schemas[id] = await loadSchema(id);
   }
+  // 現在の選択値は await 後に読む (読み込み中にユーザーが変更した値を潰さないため)
+  const prevSig = sigSel.value, prevGrp = grpSel.value;
   // 選択された全データセットに共通する列 (名前で照合)
   const schemas = ids.map((id) => state.cmp.schemas[id]);
   const common = schemas[0].columns.filter((c) =>
@@ -675,14 +676,16 @@ async function updateCmpColumns() {
 
   const numeric = common.filter((c) => c.kind === "numeric");
   sigSel.innerHTML = numeric.map((c) => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join("");
-  xSel.innerHTML = common.map((c) => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join("");
+  grpSel.innerHTML = '<option value="">なし (全体のみ)</option>' +
+    common.filter((c) => c.kind !== "temporal")
+      .map((c) => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join("");
   if ([...sigSel.options].some((o) => o.value === prevSig)) sigSel.value = prevSig;
-  if ([...xSel.options].some((o) => o.value === prevX)) {
-    xSel.value = prevX;
+  if (prevGrp && [...grpSel.options].some((o) => o.value === prevGrp)) {
+    grpSel.value = prevGrp;
   } else {
-    const guess = common.find((c) => c.kind === "temporal") ||
-      common.find((c) => /time|date|timestamp|時刻|時間/i.test(c.name)) || common[0];
-    if (guess) xSel.value = guess.name;
+    // ギア段・モードらしい列を自動候補にする
+    const guess = common.find((c) => /gear|ギア|mode|モード|cluster|状態/i.test(c.name));
+    grpSel.value = guess ? guess.name : "";
   }
 }
 
@@ -691,47 +694,13 @@ $("#cmp-plot").addEventListener("click", runCompare);
 async function runCompare() {
   const ids = cmpSelectedIds();
   const signal = $("#cmp-signal").value;
-  const x = $("#cmp-x").value;
+  const groupBy = $("#cmp-groupby").value;
   if (ids.length < 2) return toast("データセットを2つ以上選択してください", "error");
   if (!signal) return toast("比較する信号を選択してください", "error");
-  const normalize = $("#cmp-normalize").checked;
   const dsName = (id) => state.datasets.find((d) => d.id === id)?.name || id;
 
   try {
-    // --- 時系列比較 (データセットごとに1トレース) ---
-    const tsResults = await Promise.all(ids.map((id) =>
-      api(`/api/datasets/${id}/timeseries`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ x, ys: [signal], max_points: 3000 }),
-      })));
-    renderChart("cmp-ts-chart", () => {
-      const traces = tsResults.map((res, i) => {
-        let xs = res.data[x];
-        if (normalize && xs.length) {
-          if (typeof xs[0] === "number") {
-            const t0 = xs[0];
-            xs = xs.map((v) => v - t0);
-          } else {
-            const t0 = Date.parse(xs[0]);
-            xs = xs.map((v) => (Date.parse(v) - t0) / 1000);
-          }
-        }
-        return {
-          type: "scattergl", mode: "lines", name: dsName(ids[i]),
-          x: xs, y: res.data[signal], line: { width: 2 },
-        };
-      });
-      Plotly.react("cmp-ts-chart", traces, baseLayout({
-        xaxis: Object.assign(baseLayout().xaxis,
-          { title: { text: normalize ? `${x} (開始点からの経過)` : x } }),
-        yaxis: Object.assign(baseLayout().yaxis, { title: { text: signal } }),
-        hovermode: "x unified",
-        showlegend: true,
-      }), PLOT_CONFIG);
-    });
-
-    // --- 統計量比較テーブル (チャートより先に入れてグリッド幅を確定させる) ---
+    // --- 統計量比較テーブル ---
     const summaries = await Promise.all(ids.map((id) => api(`/api/datasets/${id}/summary`)));
     const stats = ["count", "min", "max", "avg", "std", "q25", "q50", "q75", "null_percentage"];
     const headers = ["データセット", "件数", "最小", "最大", "平均", "標準偏差", "Q25", "中央値", "Q75", "NULL%"];
@@ -779,9 +748,46 @@ async function runCompare() {
       }), PLOT_CONFIG);
     });
 
+    // --- グループ別比較 (箱ひげ図) ---
+    if (groupBy) {
+      const gs = await api("/api/compare/groupstats", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dataset_ids: ids, column: signal, group_by: groupBy }),
+      });
+      $("#cmp-group-title").textContent = `グループ別比較: ${signal} × ${groupBy}`;
+      $("#cmp-group-card").style.display = "";
+      renderChart("cmp-group-chart", () => {
+        const colors = seriesColors();
+        const traces = gs.series.map((s, i) => ({
+          type: "box", name: dsName(s.dataset_id),
+          x: gs.groups,
+          q1: s.groups.map((g) => g?.q1 ?? null),
+          median: s.groups.map((g) => g?.median ?? null),
+          q3: s.groups.map((g) => g?.q3 ?? null),
+          lowerfence: s.groups.map((g) => g?.lowerfence ?? null),
+          upperfence: s.groups.map((g) => g?.upperfence ?? null),
+          mean: s.groups.map((g) => g?.avg ?? null),
+          marker: { color: colors[i % colors.length] },
+          line: { width: 2 },
+          boxmean: true,
+        }));
+        Plotly.react("cmp-group-chart", traces, baseLayout({
+          boxmode: "group",
+          xaxis: Object.assign(baseLayout().xaxis,
+            { title: { text: groupBy }, type: "category" }),
+          yaxis: Object.assign(baseLayout().yaxis, { title: { text: signal } }),
+          showlegend: true,
+        }), PLOT_CONFIG);
+      });
+    } else {
+      $("#cmp-group-card").style.display = "none";
+      chartRegistry.delete("cmp-group-chart");
+    }
+
     // レイアウト確定後にチャートをコンテナ幅へ合わせ直す
     requestAnimationFrame(() => {
-      ["cmp-ts-chart", "cmp-hist-chart"].forEach((id) => {
+      ["cmp-hist-chart", "cmp-group-chart"].forEach((id) => {
         const el = document.getElementById(id);
         if (el && el.data) Plotly.Plots.resize(el);
       });
@@ -804,8 +810,7 @@ $("#cmp-save-view").addEventListener("click", async () => {
       config: {
         dataset_ids: ids,
         signal: $("#cmp-signal").value,
-        x: $("#cmp-x").value,
-        normalize: $("#cmp-normalize").checked,
+        group_by: $("#cmp-groupby").value || null,
       },
     }),
   });
@@ -1054,8 +1059,10 @@ async function loadView(v) {
     $$("#cmp-datasets input").forEach((el) => { el.checked = (c.dataset_ids || []).includes(el.value); });
     await updateCmpColumns();
     if (c.signal) $("#cmp-signal").value = c.signal;
-    if (c.x) $("#cmp-x").value = c.x;
-    $("#cmp-normalize").checked = c.normalize !== false;
+    // group_by は列が存在する場合のみ復元 (旧形式ビューには無い)
+    if (c.group_by && [...$("#cmp-groupby").options].some((o) => o.value === c.group_by)) {
+      $("#cmp-groupby").value = c.group_by;
+    }
     runCompare();
     toast(`ビュー「${v.name}」を読み込みました`);
     return;

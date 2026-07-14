@@ -203,7 +203,7 @@
   <section class="page" id="page-compare">
     <div class="page-header">
       <h1>比較可視化</h1>
-      <p>タグ (A社 / B社 など) で分類したデータセットを重ねて比較します。信号は選択したデータセットに共通する列から選べます。</p>
+      <p>タグ (A社 / B社 など) で分類したデータセットを統計で比較します。記録時刻や走行内容が違っても、全体分布・グループ別 (ギア段など)・統計量で公平に比較できます。</p>
     </div>
 
     <div class="card">
@@ -218,12 +218,8 @@
         <label class="field">比較する信号
           <select id="cmp-signal" style="min-width:200px;"></select>
         </label>
-        <label class="field">X軸 (時系列比較用)
-          <select id="cmp-x" style="min-width:160px;"></select>
-        </label>
-        <label class="field" style="flex-direction:row; align-items:center; gap:6px; padding-bottom:7px;">
-          <input type="checkbox" id="cmp-normalize" checked style="accent-color:var(--accent);">
-          X軸を開始点からの経過に揃える
+        <label class="field">グループ列 (ギア段・モードなど)
+          <select id="cmp-groupby" style="min-width:180px;"><option value="">なし (全体のみ)</option></select>
         </label>
         <button class="btn primary" id="cmp-plot">⚖️ 比較する</button>
         <button class="btn" id="cmp-save-view">ビューを保存</button>
@@ -231,22 +227,23 @@
     </div>
 
     <div class="card">
-      <h2>時系列比較</h2>
-      <div class="chart tall" id="cmp-ts-chart"></div>
+      <h2>全体分布の比較 (割合 %)</h2>
+      <p style="margin:0 0 10px; color:var(--text-secondary); font-size:12px;">データ量の差を吸収するため、各データセット内での割合で比較します。</p>
+      <div class="chart" id="cmp-hist-chart"></div>
     </div>
 
-    <div class="grid-2">
-      <div class="card">
-        <h2>分布比較 (割合 %)</h2>
-        <div class="chart" id="cmp-hist-chart"></div>
+    <div class="card" id="cmp-group-card" style="display:none;">
+      <h2 id="cmp-group-title">グループ別比較 (箱ひげ図)</h2>
+      <p style="margin:0 0 10px; color:var(--text-secondary); font-size:12px;">箱 = 四分位範囲 (Q1〜Q3)、中央線 = 中央値、破線 = 平均、ひげ = 1.5×IQR 範囲。</p>
+      <div class="chart tall" id="cmp-group-chart"></div>
+    </div>
+
+    <div class="card">
+      <h2>統計量比較 (全体)</h2>
+      <div class="table-wrap">
+        <table class="data" id="cmp-stats-table"><thead></thead><tbody></tbody></table>
       </div>
-      <div class="card">
-        <h2>統計量比較</h2>
-        <div class="table-wrap">
-          <table class="data" id="cmp-stats-table"><thead></thead><tbody></tbody></table>
-        </div>
-        <div class="empty-note" id="cmp-stats-empty">「比較する」を押すとここに統計量が並びます。</div>
-      </div>
+      <div class="empty-note" id="cmp-stats-empty">「比較する」を押すとここに統計量が並びます。</div>
     </div>
   </section>
 

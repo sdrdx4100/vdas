@@ -301,6 +301,65 @@ def compare_histogram(dataset_ids: list[str], column: str, bins: int = 40) -> di
     return {"kind": "numeric", "edges": edges, "series": series}
 
 
+MAX_GROUPS = 30
+
+
+def compare_groupstats(dataset_ids: list[str], column: str, group_by: str) -> dict[str, Any]:
+    """グループ列 (ギア段・走行モードなど) で層別し、データセット間で
+    信号の統計量 (箱ひげ図用の五数要約 + 平均) を比較する。"""
+    if len(dataset_ids) < 2:
+        raise QueryError("比較には2つ以上のデータセットを選択してください")
+    if column == group_by:
+        raise QueryError("信号とグループ列には別の列を指定してください")
+
+    per_ds: dict[str, dict[str, dict[str, Any]]] = {}
+    totals: dict[str, int] = {}
+    q = None
+    for ds_id in dataset_ids:
+        table, cols = _schema_map(ds_id)
+        _check_columns(cols, column, group_by)
+        if cols[column]["kind"] != "numeric":
+            raise QueryError(f"信号には数値列を指定してください: {column}")
+        q = _quote(column)
+        g = _quote(group_by)
+        sql = (
+            f"SELECT CAST({g} AS VARCHAR) AS grp, count({q}), avg({q}), min({q}), max({q}), "
+            f"quantile_cont({q}, 0.25), quantile_cont({q}, 0.5), quantile_cont({q}, 0.75) "
+            f"FROM {_quote(table)} WHERE {q} IS NOT NULL AND {g} IS NOT NULL GROUP BY grp"
+        )
+        with db.duck() as con:
+            rows = con.execute(sql).fetchall()
+        if len(rows) > 200:
+            raise QueryError(f"グループ列「{group_by}」の値が多すぎます ({len(rows)} 種類)。"
+                             "ギア段・モードなどの離散列を指定してください")
+        stats = {}
+        for grp, cnt, avg, mn, mx, q1, med, q3 in rows:
+            iqr = (q3 - q1) if q1 is not None and q3 is not None else 0
+            stats[grp] = {
+                "count": cnt, "avg": _jsonable(avg), "min": _jsonable(mn), "max": _jsonable(mx),
+                "q1": _jsonable(q1), "median": _jsonable(med), "q3": _jsonable(q3),
+                "lowerfence": _jsonable(max(mn, q1 - 1.5 * iqr)) if q1 is not None else None,
+                "upperfence": _jsonable(min(mx, q3 + 1.5 * iqr)) if q3 is not None else None,
+            }
+            totals[grp] = totals.get(grp, 0) + cnt
+        per_ds[ds_id] = stats
+
+    # 共通のグループ軸: 件数上位 MAX_GROUPS を数値順 (不可なら辞書順) に並べる
+    groups = sorted(totals, key=lambda k: -totals[k])[:MAX_GROUPS]
+    try:
+        groups.sort(key=float)
+    except (TypeError, ValueError):
+        groups.sort()
+
+    series = []
+    for ds_id in dataset_ids:
+        series.append({
+            "dataset_id": ds_id,
+            "groups": [per_ds[ds_id].get(grp) for grp in groups],
+        })
+    return {"column": column, "group_by": group_by, "groups": groups, "series": series}
+
+
 def _jsonable(v: Any) -> Any:
     if v is None or isinstance(v, (int, float, str, bool)):
         if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):

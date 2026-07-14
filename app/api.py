@@ -149,6 +149,17 @@ def post_compare_histogram(req: CompareHistogramRequest):
     return _wrap(queries.compare_histogram, req.dataset_ids, req.column, req.bins)
 
 
+class CompareGroupStatsRequest(BaseModel):
+    dataset_ids: list[str] = Field(min_length=2)
+    column: str
+    group_by: str
+
+
+@router.post("/compare/groupstats")
+def post_compare_groupstats(req: CompareGroupStatsRequest):
+    return _wrap(queries.compare_groupstats, req.dataset_ids, req.column, req.group_by)
+
+
 # ---------- 保存ビュー (可視化状態・条件の保存) ----------
 
 class SavedViewCreate(BaseModel):

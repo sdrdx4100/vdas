@@ -31,6 +31,10 @@
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="10" height="10" rx="1.5"/><path d="M7 17h9a1 1 0 0 0 1-1V7"/></svg>
     比較可視化
   </button>
+  <button class="nav-item" data-page="cluster">
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="2.2"/><circle cx="14.5" cy="8" r="2.2"/><circle cx="9" cy="14.5" r="2.2"/><path d="M7.8 7.4l4.6 0M7 8.2l1.2 4.2M13.2 9.8l-3 3.4" stroke-dasharray="1.5 1.8"/></svg>
+    クラスタリング
+  </button>
   <button class="nav-item" data-page="views">
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 3h10a1 1 0 0 1 1 1v13l-6-3.5L4 17V4a1 1 0 0 1 1-1Z"/></svg>
     保存ビュー
@@ -242,6 +246,72 @@
           <table class="data" id="cmp-stats-table"><thead></thead><tbody></tbody></table>
         </div>
         <div class="empty-note" id="cmp-stats-empty">「比較する」を押すとここに統計量が並びます。</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================== クラスタリング ================== -->
+  <section class="page" id="page-cluster">
+    <div class="page-header">
+      <h1>クラスタリング (走行状態の自動ラベリング)</h1>
+      <p>選択した信号を K-means でクラスタリングし、結果をデータセットに列として書き戻します。書き戻した列はフィルタ・散布図の色分け・分布比較でそのまま使えます。</p>
+    </div>
+
+    <div class="card">
+      <div class="controls-row">
+        <label class="field">データセット
+          <select id="cl-dataset" style="min-width:220px;"></select>
+        </label>
+        <label class="field">クラスタ数 k
+          <input type="number" id="cl-k" value="4" min="2" max="20" style="width:80px;">
+        </label>
+        <label class="field">結果列名
+          <input type="text" id="cl-colname" value="cluster" style="width:140px;">
+        </label>
+        <button class="btn primary" id="cl-run">🧩 クラスタリング実行</button>
+      </div>
+
+      <h3>クラスタリングに使う信号 (数値列)</h3>
+      <div class="controls-row" style="margin-bottom:8px;">
+        <input type="search" id="cl-col-search" placeholder="信号名で絞り込み…" style="flex:1; max-width:320px;">
+      </div>
+      <div class="col-picker" id="cl-cols" style="max-height:200px;"></div>
+      <div id="cl-status" style="margin-top:10px;"></div>
+    </div>
+
+    <div class="card" id="cl-result-card" style="display:none;">
+      <h2>クラスタプロファイル (各クラスタの信号平均)</h2>
+      <div class="table-wrap">
+        <table class="data" id="cl-centers-table"><thead></thead><tbody></tbody></table>
+      </div>
+    </div>
+
+    <div class="grid-2" id="cl-charts" style="display:none;">
+      <div class="card">
+        <h2>散布図 (クラスタ色分け)</h2>
+        <div class="controls-row" style="margin-bottom:10px;">
+          <label class="field">X
+            <select id="cl-sc-x" style="min-width:130px;"></select>
+          </label>
+          <label class="field">Y
+            <select id="cl-sc-y" style="min-width:130px;"></select>
+          </label>
+          <button class="btn" id="cl-sc-plot">再描画</button>
+        </div>
+        <div class="chart" id="cl-sc-chart"></div>
+      </div>
+      <div class="card">
+        <h2>時系列 (クラスタ色分け)</h2>
+        <div class="controls-row" style="margin-bottom:10px;">
+          <label class="field">X軸 (時間軸)
+            <select id="cl-ts-x" style="min-width:130px;"></select>
+          </label>
+          <label class="field">信号
+            <select id="cl-ts-y" style="min-width:130px;"></select>
+          </label>
+          <button class="btn" id="cl-ts-plot">再描画</button>
+        </div>
+        <div class="chart" id="cl-ts-chart"></div>
       </div>
     </div>
   </section>

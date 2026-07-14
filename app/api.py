@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
-from . import db, ingest, queries
+from . import clustering, db, ingest, queries
 
 router = APIRouter(prefix="/api")
 
@@ -121,6 +121,19 @@ class ScatterRequest(BaseModel):
 def post_scatter(dataset_id: str, req: ScatterRequest):
     return _wrap(queries.scatter, dataset_id, req.x, req.y, req.color,
                  [f.model_dump() for f in req.filters], req.max_points)
+
+
+# ---------- クラスタリング ----------
+
+class ClusteringRequest(BaseModel):
+    features: list[str] = Field(min_length=1)
+    k: int = 4
+    column_name: str = "cluster"
+
+
+@router.post("/datasets/{dataset_id}/cluster")
+def post_cluster(dataset_id: str, req: ClusteringRequest):
+    return _wrap(clustering.run_clustering, dataset_id, req.features, req.k, req.column_name)
 
 
 # ---------- データセット比較 ----------

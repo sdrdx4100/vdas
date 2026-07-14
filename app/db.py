@@ -88,6 +88,22 @@ def meta() -> Iterator[sqlite3.Connection]:
         yield _meta_conn  # type: ignore[misc]
 
 
+def reset_duckdb() -> None:
+    """DuckDB ファイルを作り直す (全削除時のディスク領域解放用)。
+
+    DROP TABLE では DuckDB ファイル内の領域が解放されないため、
+    全削除のときは接続を閉じてファイルごと作り直す。
+    """
+    global _duck_conn
+    with _duck_lock:
+        if _duck_conn is not None:
+            _duck_conn.close()
+            _duck_conn = None
+        DUCKDB_PATH.unlink(missing_ok=True)
+        DUCKDB_PATH.with_name(DUCKDB_PATH.name + ".wal").unlink(missing_ok=True)
+        _duck_conn = duckdb.connect(str(DUCKDB_PATH))
+
+
 def meta_query(sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
     with meta() as con:
         rows = con.execute(sql, params).fetchall()

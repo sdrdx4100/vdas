@@ -69,6 +69,24 @@ def post_bulk_tags(req: BulkTagsRequest):
     return _wrap(ingest.bulk_update_tags, req.dataset_ids, req.add, req.remove)
 
 
+class BulkDeleteRequest(BaseModel):
+    dataset_ids: list[str] = Field(min_length=1)
+
+
+@router.post("/datasets/bulk-delete")
+def post_bulk_delete(req: BulkDeleteRequest):
+    return _wrap(ingest.bulk_delete, req.dataset_ids)
+
+
+class DeleteAllRequest(BaseModel):
+    include_views: bool = False
+
+
+@router.post("/datasets/delete-all")
+def post_delete_all(req: DeleteAllRequest):
+    return _wrap(ingest.delete_all, req.include_views)
+
+
 @router.get("/datasets/{dataset_id}/schema")
 def get_schema(dataset_id: str):
     return _wrap(ingest.dataset_schema, dataset_id)

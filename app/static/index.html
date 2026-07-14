@@ -72,7 +72,10 @@
     </div>
 
     <div class="card">
-      <h2>データセット一覧</h2>
+      <div style="display:flex; align-items:center; justify-content:space-between;">
+        <h2>データセット一覧</h2>
+        <button class="btn subtle danger-text" id="delete-all" style="margin-bottom:12px;">🗑️ すべて削除</button>
+      </div>
       <div class="controls-row" style="margin-bottom:10px;">
         <span style="color:var(--text-secondary); font-size:12px;">タグで絞り込み:</span>
         <div id="data-tag-filter" style="display:flex; gap:6px; flex-wrap:wrap;"></div>
@@ -81,6 +84,7 @@
         <strong id="bulk-count"></strong>
         <button class="btn" id="bulk-add-tags">🏷️ タグを追加</button>
         <button class="btn" id="bulk-remove-tags">タグを外す</button>
+        <button class="btn danger-text" id="bulk-delete">🗑️ 削除</button>
         <button class="btn subtle" id="bulk-clear">選択解除</button>
       </div>
       <div class="table-wrap">

@@ -123,6 +123,30 @@ def delete_dataset(dataset_id: str) -> None:
     db.meta_execute("DELETE FROM datasets WHERE id = ?", (dataset_id,))
 
 
+def bulk_delete(dataset_ids: list[str]) -> dict[str, Any]:
+    """選択したデータセットをまとめて削除する。"""
+    for ds_id in dataset_ids:
+        delete_dataset(ds_id)
+    return {"deleted": len(dataset_ids)}
+
+
+def delete_all(include_views: bool = False) -> dict[str, Any]:
+    """全データセットを削除して初期状態に戻す。
+
+    原本ファイルと DuckDB ファイル本体も削除する (ディスク領域を解放)。
+    include_views=True なら保存ビューとラベルセットも消す。
+    """
+    datasets = list_datasets()
+    for ds in datasets:
+        Path(ds["stored_path"]).unlink(missing_ok=True)
+    db.meta_execute("DELETE FROM datasets")
+    if include_views:
+        db.meta_execute("DELETE FROM saved_views")
+        db.meta_execute("DELETE FROM label_sets")
+    db.reset_duckdb()
+    return {"deleted": len(datasets), "views_deleted": include_views}
+
+
 def dataset_schema(dataset_id: str) -> dict[str, Any]:
     ds = get_dataset(dataset_id)
     with db.duck() as con:

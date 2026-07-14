@@ -351,6 +351,41 @@ $("#bulk-remove-tags").addEventListener("click", async () => {
   refreshDatasets();
 });
 
+$("#bulk-delete").addEventListener("click", async () => {
+  const ids = [...state.dsSelection];
+  const names = state.datasets.filter((d) => state.dsSelection.has(d.id)).map((d) => d.name);
+  const list = names.slice(0, 5).join("、") + (names.length > 5 ? ` ほか${names.length - 5}件` : "");
+  if (!confirm(`選択した ${ids.length} 件のデータセットを削除しますか?\n(${list})\n\n取り込んだテーブルと原本ファイルも削除されます。この操作は取り消せません。`)) return;
+  await api("/api/datasets/bulk-delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ dataset_ids: ids }),
+  });
+  state.dsSelection.clear();
+  state.cmp.schemas = {};
+  toast(`${ids.length} 件を削除しました`);
+  refreshDatasets();
+});
+
+$("#delete-all").addEventListener("click", async () => {
+  const n = state.datasets.length;
+  if (!n) return toast("削除するデータセットがありません", "error");
+  if (!confirm(`全 ${n} 件のデータセットを削除して初期状態に戻しますか?\n\n取り込んだテーブル・原本ファイル・DuckDBファイルがすべて削除されます。この操作は取り消せません。`)) return;
+  const includeViews = confirm("保存ビューとラベルセットも一緒に削除しますか?\n\nOK = 一緒に削除 / キャンセル = データセットのみ削除");
+  const res = await api("/api/datasets/delete-all", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ include_views: includeViews }),
+  });
+  state.dsSelection.clear();
+  state.dataTagFilter.clear();
+  state.cmp.schemas = {};
+  state.cmp.last = null;
+  toast(`全 ${res.deleted} 件を削除しました${includeViews ? " (保存ビュー・ラベルセットも削除)" : ""}`);
+  refreshDatasets();
+  refreshLabelsets();
+});
+
 function tagChips(tags) {
   return (tags || []).map((t) => `<span class="chip accent">${esc(t)}</span>`).join(" ");
 }

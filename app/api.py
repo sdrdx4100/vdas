@@ -142,22 +142,76 @@ class CompareHistogramRequest(BaseModel):
     dataset_ids: list[str] = Field(min_length=2)
     column: str
     bins: int = 40
+    filters: list[FilterSpec] = []
 
 
 @router.post("/compare/histogram")
 def post_compare_histogram(req: CompareHistogramRequest):
-    return _wrap(queries.compare_histogram, req.dataset_ids, req.column, req.bins)
+    return _wrap(queries.compare_histogram, req.dataset_ids, req.column, req.bins,
+                 [f.model_dump() for f in req.filters])
 
 
 class CompareGroupStatsRequest(BaseModel):
     dataset_ids: list[str] = Field(min_length=2)
     column: str
     group_by: str
+    filters: list[FilterSpec] = []
 
 
 @router.post("/compare/groupstats")
 def post_compare_groupstats(req: CompareGroupStatsRequest):
-    return _wrap(queries.compare_groupstats, req.dataset_ids, req.column, req.group_by)
+    return _wrap(queries.compare_groupstats, req.dataset_ids, req.column, req.group_by,
+                 [f.model_dump() for f in req.filters])
+
+
+class CompareSummaryRequest(BaseModel):
+    dataset_ids: list[str] = Field(min_length=2)
+    column: str
+    filters: list[FilterSpec] = []
+
+
+@router.post("/compare/summary")
+def post_compare_summary(req: CompareSummaryRequest):
+    return _wrap(queries.compare_summary, req.dataset_ids, req.column,
+                 [f.model_dump() for f in req.filters])
+
+
+class CompareCurveRequest(BaseModel):
+    dataset_ids: list[str] = Field(min_length=2)
+    x: str
+    y: str
+    bins: int = 40
+    filters: list[FilterSpec] = []
+
+
+@router.post("/compare/curve")
+def post_compare_curve(req: CompareCurveRequest):
+    return _wrap(queries.compare_curve, req.dataset_ids, req.x, req.y, req.bins,
+                 [f.model_dump() for f in req.filters])
+
+
+class CompareCdfRequest(BaseModel):
+    dataset_ids: list[str] = Field(min_length=2)
+    column: str
+    filters: list[FilterSpec] = []
+
+
+@router.post("/compare/cdf")
+def post_compare_cdf(req: CompareCdfRequest):
+    return _wrap(queries.compare_cdf, req.dataset_ids, req.column,
+                 [f.model_dump() for f in req.filters])
+
+
+class CompareDiffRequest(BaseModel):
+    dataset_ids: list[str] = Field(min_length=2)
+    baseline: str | None = None
+    filters: list[FilterSpec] = []
+
+
+@router.post("/compare/diff")
+def post_compare_diff(req: CompareDiffRequest):
+    return _wrap(queries.compare_diff, req.dataset_ids, req.baseline,
+                 [f.model_dump() for f in req.filters])
 
 
 # ---------- 保存ビュー (可視化状態・条件の保存) ----------

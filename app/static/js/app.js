@@ -80,7 +80,7 @@ const state = {
   datasets: [],
   ts: { schema: null, filters: [] },   // 時系列タブ
   st: { schema: null, filters: [] },   // 統計タブ
-  cmp: { tagFilter: new Set(), schemas: {} },  // 比較タブ
+  cmp: { tagFilter: new Set(), schemas: {}, schema: null, filters: [], last: null },  // 比較タブ
   cl: { schema: null, result: null },          // クラスタリングタブ
   labelsets: [],
   tags: [],
@@ -662,24 +662,42 @@ function cmpSelectedIds() {
 async function updateCmpColumns() {
   const ids = cmpSelectedIds();
   const sigSel = $("#cmp-signal"), grpSel = $("#cmp-groupby");
-  if (!ids.length) { sigSel.innerHTML = ""; grpSel.innerHTML = '<option value="">なし (全体のみ)</option>'; return; }
+  const baseSel = $("#cmp-baseline"), cxSel = $("#cmp-curve-x"), cySel = $("#cmp-curve-y");
+  if (!ids.length) {
+    sigSel.innerHTML = ""; grpSel.innerHTML = '<option value="">なし (全体のみ)</option>';
+    baseSel.innerHTML = ""; cxSel.innerHTML = ""; cySel.innerHTML = "";
+    state.cmp.schema = null;
+    return;
+  }
 
   for (const id of ids) {
     if (!state.cmp.schemas[id]) state.cmp.schemas[id] = await loadSchema(id);
   }
   // 現在の選択値は await 後に読む (読み込み中にユーザーが変更した値を潰さないため)
-  const prevSig = sigSel.value, prevGrp = grpSel.value;
+  const prevSig = sigSel.value, prevGrp = grpSel.value, prevBase = baseSel.value;
+  const prevCx = cxSel.value, prevCy = cySel.value;
   // 選択された全データセットに共通する列 (名前で照合)
   const schemas = ids.map((id) => state.cmp.schemas[id]);
   const common = schemas[0].columns.filter((c) =>
     schemas.every((s) => s.columns.some((o) => o.name === c.name && o.kind === c.kind)));
+  state.cmp.schema = { columns: common };
+  state.cmp.filters = state.cmp.filters.filter((f) => common.some((c) => c.name === f.column));
+  renderFilters("#cmp-filters", state.cmp);
 
   const numeric = common.filter((c) => c.kind === "numeric");
-  sigSel.innerHTML = numeric.map((c) => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join("");
+  const numOpts = numeric.map((c) => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join("");
+  sigSel.innerHTML = numOpts;
+  cxSel.innerHTML = numOpts;
+  cySel.innerHTML = numOpts;
   grpSel.innerHTML = '<option value="">なし (全体のみ)</option>' +
     common.filter((c) => c.kind !== "temporal")
       .map((c) => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join("");
-  if ([...sigSel.options].some((o) => o.value === prevSig)) sigSel.value = prevSig;
+  baseSel.innerHTML = ids.map((id) =>
+    `<option value="${esc(id)}">${esc(state.datasets.find((d) => d.id === id)?.name || id)}</option>`).join("");
+
+  const keep = (sel, prev) => prev && [...sel.options].some((o) => o.value === prev) && (sel.value = prev);
+  keep(sigSel, prevSig);
+  keep(baseSel, prevBase);
   if (prevGrp && [...grpSel.options].some((o) => o.value === prevGrp)) {
     grpSel.value = prevGrp;
   } else {
@@ -687,55 +705,143 @@ async function updateCmpColumns() {
     const guess = common.find((c) => /gear|ギア|mode|モード|cluster|状態/i.test(c.name));
     grpSel.value = guess ? guess.name : "";
   }
+  // 特性カーブの初期候補: X = 車速らしい列、Y = 回転数らしい列
+  if (!keep(cxSel, prevCx)) {
+    const gx = numeric.find((c) => /speed|km\/?h|velocity|車速/i.test(c.name)) || numeric[0];
+    if (gx) cxSel.value = gx.name;
+  }
+  if (!keep(cySel, prevCy)) {
+    const gy = numeric.find((c) => /rpm|回転/i.test(c.name)) || numeric[1] || numeric[0];
+    if (gy) cySel.value = gy.name;
+  }
 }
 
+$("#cmp-add-filter").addEventListener("click", () => {
+  if (!state.cmp.schema) return toast("先にデータセットを2つ以上選択してください", "error");
+  state.cmp.filters.push({ column: state.cmp.schema.columns[0]?.name, op: "eq", value: "" });
+  renderFilters("#cmp-filters", state.cmp);
+});
+
 $("#cmp-plot").addEventListener("click", runCompare);
+
+const cmpDsName = (id) => state.datasets.find((d) => d.id === id)?.name || id;
+const swatch = (color) =>
+  `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${color};margin-right:6px;"></span>`;
+
+function fmtStat(v) {
+  const n = Number(v);
+  if (v != null && Number.isFinite(n) && !Number.isInteger(n)) return n.toPrecision(5);
+  return v ?? "—";
+}
 
 async function runCompare() {
   const ids = cmpSelectedIds();
   const signal = $("#cmp-signal").value;
-  const groupBy = $("#cmp-groupby").value;
   if (ids.length < 2) return toast("データセットを2つ以上選択してください", "error");
   if (!signal) return toast("比較する信号を選択してください", "error");
-  const dsName = (id) => state.datasets.find((d) => d.id === id)?.name || id;
-
+  const ctx = {
+    ids, signal,
+    groupBy: $("#cmp-groupby").value,
+    baseline: $("#cmp-baseline").value || ids[0],
+    filters: activeFilters(state.cmp),
+  };
+  state.cmp.last = ctx;
   try {
-    // --- 統計量比較テーブル ---
-    const summaries = await Promise.all(ids.map((id) => api(`/api/datasets/${id}/summary`)));
-    const stats = ["count", "min", "max", "avg", "std", "q25", "q50", "q75", "null_percentage"];
-    const headers = ["データセット", "件数", "最小", "最大", "平均", "標準偏差", "Q25", "中央値", "Q75", "NULL%"];
-    $("#cmp-stats-table thead").innerHTML =
-      `<tr>${headers.map((h) => `<th>${h}</th>`).join("")}</tr>`;
-    const colors = seriesColors();
-    $("#cmp-stats-table tbody").innerHTML = ids.map((id, i) => {
-      const row = summaries[i].stats.find((r) => r.column_name === signal) || {};
-      const cells = stats.map((k) => {
-        let v = row[k];
-        const n = Number(v);
-        if (v != null && Number.isFinite(n) && !Number.isInteger(n)) v = n.toPrecision(5);
-        return `<td class="num">${esc(v ?? "—")}</td>`;
-      }).join("");
-      return `<tr><td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${colors[i % colors.length]};margin-right:6px;"></span><strong>${esc(dsName(id))}</strong></td>${cells}</tr>`;
-    }).join("");
-    $("#cmp-stats-empty").style.display = "none";
-
-    // --- 分布比較 (共通ビン・割合) ---
-    const hist = await api("/api/compare/histogram", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ dataset_ids: ids, column: signal, bins: 40 }),
+    await renderDiffTable(ctx);
+    await renderSignalCharts(ctx);
+    await plotCmpCurve();
+    // レイアウト確定後にチャートをコンテナ幅へ合わせ直す
+    requestAnimationFrame(() => {
+      ["cmp-hist-chart", "cmp-cdf-chart", "cmp-group-chart", "cmp-curve-chart"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el && el.data) Plotly.Plots.resize(el);
+      });
     });
-    renderChart("cmp-hist-chart", () => {
+  } catch (e) {
+    toast(`エラー: ${e.message}`, "error");
+  }
+}
+
+// --- 彼我差分サマリ: 共通信号を KS 統計量でランキング ---
+async function renderDiffTable(ctx) {
+  const diff = await api("/api/compare/diff", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ dataset_ids: ctx.ids, baseline: ctx.baseline, filters: ctx.filters }),
+  });
+  const others = ctx.ids.filter((id) => id !== diff.baseline);
+  const headers = ["信号", "分布差 (KS)", `基準: ${cmpDsName(diff.baseline)} 平均`]
+    .concat(others.map((id) => `${cmpDsName(id)} 平均 (Δ%)`));
+  $("#cmp-diff-table thead").innerHTML =
+    `<tr>${headers.map((h) => `<th>${esc(h)}</th>`).join("")}</tr>`;
+  const tbody = $("#cmp-diff-table tbody");
+  tbody.innerHTML = "";
+  for (const s of diff.signals) {
+    const tr = document.createElement("tr");
+    tr.style.cursor = "pointer";
+    tr.title = "クリックすると下のチャートがこの信号に切り替わります";
+    const ksBar = s.max_ks == null ? "—" :
+      `<div style="display:flex;align-items:center;gap:8px;">
+         <div style="width:90px;height:8px;border-radius:4px;background:var(--subtle-active);overflow:hidden;">
+           <div style="width:${Math.round(s.max_ks * 100)}%;height:100%;background:var(--accent);"></div>
+         </div><span class="num">${s.max_ks.toFixed(3)}</span></div>`;
+    const compCells = others.map((id) => {
+      const c = s.comps.find((x) => x.dataset_id === id) || {};
+      const delta = c.delta_pct == null ? "" :
+        ` <span style="color:${Math.abs(c.delta_pct) >= 5 ? "var(--danger)" : "var(--text-muted)"};">(${c.delta_pct > 0 ? "+" : ""}${c.delta_pct}%)</span>`;
+      return `<td class="num">${esc(fmtStat(c.avg))}${delta}</td>`;
+    }).join("");
+    tr.innerHTML = `<td><strong>${esc(s.name)}</strong></td><td>${ksBar}</td>` +
+      `<td class="num">${esc(fmtStat(s.base_avg))}</td>${compCells}`;
+    tr.addEventListener("click", () => {
+      if (![...$("#cmp-signal").options].some((o) => o.value === s.name)) return;
+      $("#cmp-signal").value = s.name;
+      state.cmp.last = { ...state.cmp.last, signal: s.name };
+      renderSignalCharts(state.cmp.last).catch((e) => toast(`エラー: ${e.message}`, "error"));
+      toast(`信号「${s.name}」に切り替えました`);
+    });
+    tbody.appendChild(tr);
+  }
+  $("#cmp-diff-empty").style.display = "none";
+  if (diff.truncated) toast("共通信号が多いため先頭100信号のみスキャンしました");
+}
+
+// --- 選択信号のチャート群 (分布・CDF・グループ別・統計量) ---
+async function renderSignalCharts(ctx) {
+  const { ids, signal, groupBy, filters } = ctx;
+  const post = (path, body) => api(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  // 統計量比較テーブル (フィルタ適用)
+  const sum = await post("/api/compare/summary", { dataset_ids: ids, column: signal, filters });
+  const statKeys = ["count", "min", "max", "avg", "std", "q25", "q50", "q75"];
+  const headers = ["データセット", "件数", "最小", "最大", "平均", "標準偏差", "Q25", "中央値", "Q75"];
+  $("#cmp-stats-table thead").innerHTML =
+    `<tr>${headers.map((h) => `<th>${h}</th>`).join("")}</tr>`;
+  const colors = seriesColors();
+  $("#cmp-stats-table tbody").innerHTML = sum.series.map((row, i) => {
+    const cells = statKeys.map((k) => `<td class="num">${esc(fmtStat(row[k]))}</td>`).join("");
+    return `<tr><td>${swatch(colors[i % colors.length])}<strong>${esc(cmpDsName(row.dataset_id))}</strong></td>${cells}</tr>`;
+  }).join("");
+  $("#cmp-stats-empty").style.display = "none";
+
+  // 分布比較 (共通ビン・割合)
+  const hist = await post("/api/compare/histogram",
+    { dataset_ids: ids, column: signal, bins: 40, filters });
+  renderChart("cmp-hist-chart", () => {
       let traces;
       if (hist.kind === "numeric") {
         const centers = hist.edges.slice(0, -1).map((e, i) => (e + hist.edges[i + 1]) / 2);
         traces = hist.series.map((s) => ({
-          type: "bar", x: centers, y: s.percents, name: dsName(s.dataset_id), opacity: 0.6,
+          type: "bar", x: centers, y: s.percents, name: cmpDsName(s.dataset_id), opacity: 0.6,
           hovertemplate: "%{x}<br>%{y}%<extra>%{fullData.name}</extra>",
         }));
       } else {
         traces = hist.series.map((s) => ({
-          type: "bar", x: hist.labels, y: s.percents, name: dsName(s.dataset_id),
+          type: "bar", x: hist.labels, y: s.percents, name: cmpDsName(s.dataset_id),
           hovertemplate: "%{x}<br>%{y}%<extra>%{fullData.name}</extra>",
         }));
       }
@@ -748,53 +854,104 @@ async function runCompare() {
       }), PLOT_CONFIG);
     });
 
-    // --- グループ別比較 (箱ひげ図) ---
-    if (groupBy) {
-      const gs = await api("/api/compare/groupstats", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dataset_ids: ids, column: signal, group_by: groupBy }),
-      });
-      $("#cmp-group-title").textContent = `グループ別比較: ${signal} × ${groupBy}`;
-      $("#cmp-group-card").style.display = "";
-      renderChart("cmp-group-chart", () => {
-        const colors = seriesColors();
-        const traces = gs.series.map((s, i) => ({
-          type: "box", name: dsName(s.dataset_id),
-          x: gs.groups,
-          q1: s.groups.map((g) => g?.q1 ?? null),
-          median: s.groups.map((g) => g?.median ?? null),
-          q3: s.groups.map((g) => g?.q3 ?? null),
-          lowerfence: s.groups.map((g) => g?.lowerfence ?? null),
-          upperfence: s.groups.map((g) => g?.upperfence ?? null),
-          mean: s.groups.map((g) => g?.avg ?? null),
-          marker: { color: colors[i % colors.length] },
-          line: { width: 2 },
-          boxmean: true,
+    // 累積分布 (CDF) 比較
+    const cdf = await post("/api/compare/cdf", { dataset_ids: ids, column: signal, filters });
+    renderChart("cmp-cdf-chart", () => {
+      const traces = cdf.series
+        .filter((s) => s.values)
+        .map((s) => ({
+          type: "scatter", mode: "lines", name: cmpDsName(s.dataset_id),
+          x: s.values, y: cdf.percents, line: { width: 2 },
+          hovertemplate: `${esc(signal)} ≤ %{x}<br>累積 %{y}%<extra>%{fullData.name}</extra>`,
         }));
-        Plotly.react("cmp-group-chart", traces, baseLayout({
-          boxmode: "group",
-          xaxis: Object.assign(baseLayout().xaxis,
-            { title: { text: groupBy }, type: "category" }),
-          yaxis: Object.assign(baseLayout().yaxis, { title: { text: signal } }),
-          showlegend: true,
-        }), PLOT_CONFIG);
-      });
-    } else {
-      $("#cmp-group-card").style.display = "none";
-      chartRegistry.delete("cmp-group-chart");
-    }
+      Plotly.react("cmp-cdf-chart", traces, baseLayout({
+        xaxis: Object.assign(baseLayout().xaxis, { title: { text: signal } }),
+        yaxis: Object.assign(baseLayout().yaxis, { title: { text: "累積割合 (%)" }, range: [0, 100] }),
+        hovermode: "y unified",
+        showlegend: true,
+      }), PLOT_CONFIG);
+    });
 
-    // レイアウト確定後にチャートをコンテナ幅へ合わせ直す
-    requestAnimationFrame(() => {
-      ["cmp-hist-chart", "cmp-group-chart"].forEach((id) => {
-        const el = document.getElementById(id);
-        if (el && el.data) Plotly.Plots.resize(el);
+  // グループ別比較 (箱ひげ図)
+  if (groupBy) {
+    const gs = await post("/api/compare/groupstats",
+      { dataset_ids: ids, column: signal, group_by: groupBy, filters });
+    $("#cmp-group-title").textContent = `グループ別比較: ${signal} × ${groupBy}`;
+    $("#cmp-group-card").style.display = "";
+    renderChart("cmp-group-chart", () => {
+      const traces = gs.series.map((s, i) => ({
+        type: "box", name: cmpDsName(s.dataset_id),
+        x: gs.groups,
+        q1: s.groups.map((g) => g?.q1 ?? null),
+        median: s.groups.map((g) => g?.median ?? null),
+        q3: s.groups.map((g) => g?.q3 ?? null),
+        lowerfence: s.groups.map((g) => g?.lowerfence ?? null),
+        upperfence: s.groups.map((g) => g?.upperfence ?? null),
+        mean: s.groups.map((g) => g?.avg ?? null),
+        marker: { color: seriesColors()[i % 8] },
+        line: { width: 2 },
+        boxmean: true,
+      }));
+      Plotly.react("cmp-group-chart", traces, baseLayout({
+        boxmode: "group",
+        xaxis: Object.assign(baseLayout().xaxis,
+          { title: { text: groupBy }, type: "category" }),
+        yaxis: Object.assign(baseLayout().yaxis, { title: { text: signal } }),
+        showlegend: true,
+      }), PLOT_CONFIG);
+    });
+  } else {
+    $("#cmp-group-card").style.display = "none";
+    chartRegistry.delete("cmp-group-chart");
+  }
+}
+
+// --- 特性カーブ比較 (X ビン × Y 平均 + P10-P90 帯) ---
+$("#cmp-curve-plot").addEventListener("click", () => plotCmpCurve().catch(
+  (e) => toast(`エラー: ${e.message}`, "error")));
+
+async function plotCmpCurve() {
+  const ctx = state.cmp.last;
+  if (!ctx) return;
+  const x = $("#cmp-curve-x").value, y = $("#cmp-curve-y").value;
+  if (!x || !y) return;
+  if (x === y) return toast("特性カーブの X と Y には別の列を指定してください", "error");
+  const curve = await api("/api/compare/curve", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ dataset_ids: ctx.ids, x, y, bins: 40, filters: ctx.filters }),
+  });
+  renderChart("cmp-curve-chart", () => {
+    const colors = seriesColors();
+    const traces = [];
+    curve.series.forEach((s, i) => {
+      const color = colors[i % colors.length];
+      const name = cmpDsName(s.dataset_id);
+      // P10-P90 帯 (null ビンを除いた連続区間で塗る)
+      traces.push({
+        type: "scatter", mode: "lines", x: curve.centers, y: s.p10,
+        line: { width: 0 }, hoverinfo: "skip", showlegend: false,
+        legendgroup: name, connectgaps: false,
+      });
+      traces.push({
+        type: "scatter", mode: "lines", x: curve.centers, y: s.p90,
+        fill: "tonexty", fillcolor: color + "26", line: { width: 0 },
+        hoverinfo: "skip", showlegend: false, legendgroup: name, connectgaps: false,
+      });
+      traces.push({
+        type: "scatter", mode: "lines", x: curve.centers, y: s.mean,
+        name, line: { width: 2, color }, legendgroup: name, connectgaps: false,
+        customdata: s.count,
+        hovertemplate: `${esc(curve.y)} 平均 %{y}<br>n=%{customdata}<extra>%{fullData.name}</extra>`,
       });
     });
-  } catch (e) {
-    toast(`エラー: ${e.message}`, "error");
-  }
+    Plotly.react("cmp-curve-chart", traces, baseLayout({
+      xaxis: Object.assign(baseLayout().xaxis, { title: { text: curve.x } }),
+      yaxis: Object.assign(baseLayout().yaxis, { title: { text: curve.y } }),
+      hovermode: "x unified",
+      showlegend: true,
+    }), PLOT_CONFIG);
+  });
 }
 
 $("#cmp-save-view").addEventListener("click", async () => {
@@ -811,6 +968,10 @@ $("#cmp-save-view").addEventListener("click", async () => {
         dataset_ids: ids,
         signal: $("#cmp-signal").value,
         group_by: $("#cmp-groupby").value || null,
+        baseline: $("#cmp-baseline").value || null,
+        filters: activeFilters(state.cmp),
+        curve_x: $("#cmp-curve-x").value || null,
+        curve_y: $("#cmp-curve-y").value || null,
       },
     }),
   });
@@ -1057,12 +1218,16 @@ async function loadView(v) {
     renderCmpTagFilter();
     renderCmpDatasets();
     $$("#cmp-datasets input").forEach((el) => { el.checked = (c.dataset_ids || []).includes(el.value); });
+    state.cmp.filters = (c.filters || []).map((f) => ({ ...f }));
     await updateCmpColumns();
-    if (c.signal) $("#cmp-signal").value = c.signal;
-    // group_by は列が存在する場合のみ復元 (旧形式ビューには無い)
-    if (c.group_by && [...$("#cmp-groupby").options].some((o) => o.value === c.group_by)) {
-      $("#cmp-groupby").value = c.group_by;
-    }
+    const setIf = (sel, v) => {
+      if (v && [...$(sel).options].some((o) => o.value === v)) $(sel).value = v;
+    };
+    setIf("#cmp-signal", c.signal);
+    setIf("#cmp-groupby", c.group_by);
+    setIf("#cmp-baseline", c.baseline);
+    setIf("#cmp-curve-x", c.curve_x);
+    setIf("#cmp-curve-y", c.curve_y);
     runCompare();
     toast(`ビュー「${v.name}」を読み込みました`);
     return;

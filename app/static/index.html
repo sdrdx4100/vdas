@@ -221,15 +221,39 @@
         <label class="field">グループ列 (ギア段・モードなど)
           <select id="cmp-groupby" style="min-width:180px;"><option value="">なし (全体のみ)</option></select>
         </label>
+        <label class="field">基準 (自社) データセット
+          <select id="cmp-baseline" style="min-width:180px;"></select>
+        </label>
         <button class="btn primary" id="cmp-plot">⚖️ 比較する</button>
         <button class="btn" id="cmp-save-view">ビューを保存</button>
       </div>
+
+      <h3>比較条件 (全データセットに同じ条件を適用して土俵を揃える)</h3>
+      <div id="cmp-filters"></div>
+      <button class="btn subtle" id="cmp-add-filter">＋ 条件を追加</button>
     </div>
 
     <div class="card">
-      <h2>全体分布の比較 (割合 %)</h2>
-      <p style="margin:0 0 10px; color:var(--text-secondary); font-size:12px;">データ量の差を吸収するため、各データセット内での割合で比較します。</p>
-      <div class="chart" id="cmp-hist-chart"></div>
+      <h2>彼我差分サマリ (共通信号の自動スキャン)</h2>
+      <p style="margin:0 0 10px; color:var(--text-secondary); font-size:12px;">
+        共通するすべての数値信号について、基準データセットとの分布のずれ (KS統計量: 0=一致、1=完全分離) と平均の差を計算し、差が大きい順に並べます。行をクリックすると下のチャートがその信号に切り替わります。</p>
+      <div class="table-wrap" style="max-height:420px; overflow-y:auto;">
+        <table class="data" id="cmp-diff-table"><thead></thead><tbody></tbody></table>
+      </div>
+      <div class="empty-note" id="cmp-diff-empty">「比較する」を押すとここに差分ランキングが表示されます。</div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <h2>全体分布の比較 (割合 %)</h2>
+        <p style="margin:0 0 10px; color:var(--text-secondary); font-size:12px;">データ量の差を吸収するため、各データセット内での割合で比較します。</p>
+        <div class="chart" id="cmp-hist-chart"></div>
+      </div>
+      <div class="card">
+        <h2>累積分布の比較 (CDF)</h2>
+        <p style="margin:0 0 10px; color:var(--text-secondary); font-size:12px;">「中央値」「上位10% (=90%点)」などパーセンタイル同士の差が読み取れます。</p>
+        <div class="chart" id="cmp-cdf-chart"></div>
+      </div>
     </div>
 
     <div class="card" id="cmp-group-card" style="display:none;">
@@ -239,7 +263,23 @@
     </div>
 
     <div class="card">
-      <h2>統計量比較 (全体)</h2>
+      <h2>特性カーブ比較</h2>
+      <p style="margin:0 0 10px; color:var(--text-secondary); font-size:12px;">
+        時間軸に依存しない物理特性の比較。X をビン分割し、実線 = 各ビンの Y 平均、帯 = P10〜P90。例: 車速 × エンジン回転数、スロットル × 加速度。</p>
+      <div class="controls-row" style="margin-bottom:10px;">
+        <label class="field">X (条件軸)
+          <select id="cmp-curve-x" style="min-width:160px;"></select>
+        </label>
+        <label class="field">Y (特性値)
+          <select id="cmp-curve-y" style="min-width:160px;"></select>
+        </label>
+        <button class="btn" id="cmp-curve-plot">再描画</button>
+      </div>
+      <div class="chart" id="cmp-curve-chart"></div>
+    </div>
+
+    <div class="card">
+      <h2>統計量比較 (選択信号)</h2>
       <div class="table-wrap">
         <table class="data" id="cmp-stats-table"><thead></thead><tbody></tbody></table>
       </div>

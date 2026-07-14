@@ -8,6 +8,8 @@ from __future__ import annotations
 import math
 from typing import Any
 
+import numpy as np
+
 from . import db
 from .ingest import dataset_schema
 
@@ -231,29 +233,37 @@ def scatter(dataset_id: str, x: str, y: str, color: str | None = None,
     return {"total_rows": total, "returned_rows": len(rows), "data": out}
 
 
-def compare_histogram(dataset_ids: list[str], column: str, bins: int = 40) -> dict[str, Any]:
+def _compare_tables(dataset_ids: list[str], *needed: str) -> list[tuple[str, str, dict[str, dict[str, Any]]]]:
+    """比較対象の (dataset_id, table, cols) を検証付きで揃える。"""
+    if len(dataset_ids) < 2:
+        raise QueryError("比較には2つ以上のデータセットを選択してください")
+    tables = []
+    for ds_id in dataset_ids:
+        table, cols = _schema_map(ds_id)
+        _check_columns(cols, *needed)
+        tables.append((ds_id, table, cols))
+    return tables
+
+
+def compare_histogram(dataset_ids: list[str], column: str, bins: int = 40,
+                      filters: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """複数データセットを共通のビン境界で集計し、分布を比較可能にする。
 
     データセットごとの行数差を吸収するため、割合 (%) も返す。
     """
-    if len(dataset_ids) < 2:
-        raise QueryError("比較には2つ以上のデータセットを選択してください")
     bins = max(5, min(int(bins), 200))
-
-    tables: list[tuple[str, str, dict[str, dict[str, Any]]]] = []
-    for ds_id in dataset_ids:
-        table, cols = _schema_map(ds_id)
-        _check_columns(cols, column)
-        tables.append((ds_id, table, cols))
+    tables = _compare_tables(dataset_ids, column)
 
     if any(cols[column]["kind"] != "numeric" for _, _, cols in tables):
         # カテゴリ列: 全データセット合算の上位カテゴリを共通ラベルにする
         totals: dict[str, int] = {}
         per_ds: dict[str, dict[str, int]] = {}
         with db.duck() as con:
-            for ds_id, table, _ in tables:
+            for ds_id, table, cols in tables:
+                where, params = _build_where(filters, cols)
                 rows = con.execute(
-                    f'SELECT CAST({_quote(column)} AS VARCHAR) AS v, count(*) FROM {_quote(table)} GROUP BY v'
+                    f'SELECT CAST({_quote(column)} AS VARCHAR) AS v, count(*) FROM {_quote(table)}{where} GROUP BY v',
+                    params,
                 ).fetchall()
                 per_ds[ds_id] = {r[0]: r[1] for r in rows}
                 for k, c in per_ds[ds_id].items():
@@ -268,11 +278,13 @@ def compare_histogram(dataset_ids: list[str], column: str, bins: int = 40) -> di
         return {"kind": "categorical", "labels": labels, "series": series}
 
     # 数値列: 全データセット共通の min/max からビン境界を決める
+    q = _quote(column)
     with db.duck() as con:
         mns, mxs = [], []
-        for _, table, _ in tables:
+        for _, table, cols in tables:
+            where, params = _build_where(filters, cols)
             mn, mx = con.execute(
-                f"SELECT min({_quote(column)}), max({_quote(column)}) FROM {_quote(table)}").fetchone()
+                f"SELECT min({q}), max({q}) FROM {_quote(table)}{where}", params).fetchone()
             if mn is not None:
                 mns.append(float(mn))
                 mxs.append(float(mx))
@@ -282,13 +294,13 @@ def compare_histogram(dataset_ids: list[str], column: str, bins: int = 40) -> di
         if mn == mx:
             mx = mn + 1
         width = (mx - mn) / bins
-        q = _quote(column)
         series = []
-        for ds_id, table, _ in tables:
+        for ds_id, table, cols in tables:
+            where, params = _build_where(filters, cols)
             rows = con.execute(
                 f"SELECT least(cast(floor(({q} - ?) / ?) as int), ?) AS b, count(*) "
-                f"FROM {_quote(table)} WHERE {q} IS NOT NULL GROUP BY b ORDER BY b",
-                [mn, width, bins - 1],
+                f"FROM {_quote(table)}{where or ' WHERE 1=1'} AND {q} IS NOT NULL GROUP BY b ORDER BY b",
+                [mn, width, bins - 1] + params,
             ).fetchall()
             counts = [0] * bins
             for b, c in rows:
@@ -304,31 +316,28 @@ def compare_histogram(dataset_ids: list[str], column: str, bins: int = 40) -> di
 MAX_GROUPS = 30
 
 
-def compare_groupstats(dataset_ids: list[str], column: str, group_by: str) -> dict[str, Any]:
+def compare_groupstats(dataset_ids: list[str], column: str, group_by: str,
+                       filters: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """グループ列 (ギア段・走行モードなど) で層別し、データセット間で
     信号の統計量 (箱ひげ図用の五数要約 + 平均) を比較する。"""
-    if len(dataset_ids) < 2:
-        raise QueryError("比較には2つ以上のデータセットを選択してください")
     if column == group_by:
         raise QueryError("信号とグループ列には別の列を指定してください")
 
     per_ds: dict[str, dict[str, dict[str, Any]]] = {}
     totals: dict[str, int] = {}
-    q = None
-    for ds_id in dataset_ids:
-        table, cols = _schema_map(ds_id)
-        _check_columns(cols, column, group_by)
+    for ds_id, table, cols in _compare_tables(dataset_ids, column, group_by):
         if cols[column]["kind"] != "numeric":
             raise QueryError(f"信号には数値列を指定してください: {column}")
         q = _quote(column)
         g = _quote(group_by)
+        where, params = _build_where(filters, cols)
         sql = (
             f"SELECT CAST({g} AS VARCHAR) AS grp, count({q}), avg({q}), min({q}), max({q}), "
             f"quantile_cont({q}, 0.25), quantile_cont({q}, 0.5), quantile_cont({q}, 0.75) "
-            f"FROM {_quote(table)} WHERE {q} IS NOT NULL AND {g} IS NOT NULL GROUP BY grp"
+            f"FROM {_quote(table)}{where or ' WHERE 1=1'} AND {q} IS NOT NULL AND {g} IS NOT NULL GROUP BY grp"
         )
         with db.duck() as con:
-            rows = con.execute(sql).fetchall()
+            rows = con.execute(sql, params).fetchall()
         if len(rows) > 200:
             raise QueryError(f"グループ列「{group_by}」の値が多すぎます ({len(rows)} 種類)。"
                              "ギア段・モードなどの離散列を指定してください")
@@ -358,6 +367,166 @@ def compare_groupstats(dataset_ids: list[str], column: str, group_by: str) -> di
             "groups": [per_ds[ds_id].get(grp) for grp in groups],
         })
     return {"column": column, "group_by": group_by, "groups": groups, "series": series}
+
+
+def compare_summary(dataset_ids: list[str], column: str,
+                    filters: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """選択信号の基本統計量をデータセット間で比較する (フィルタ適用可)。"""
+    series = []
+    for ds_id, table, cols in _compare_tables(dataset_ids, column):
+        if cols[column]["kind"] != "numeric":
+            raise QueryError(f"信号には数値列を指定してください: {column}")
+        q = _quote(column)
+        where, params = _build_where(filters, cols)
+        row = None
+        with db.duck() as con:
+            row = con.execute(
+                f"SELECT count({q}), avg({q}), stddev({q}), min({q}), max({q}), "
+                f"quantile_cont({q}, 0.25), quantile_cont({q}, 0.5), quantile_cont({q}, 0.75) "
+                f"FROM {_quote(table)}{where}", params).fetchone()
+        keys = ["count", "avg", "std", "min", "max", "q25", "q50", "q75"]
+        series.append({"dataset_id": ds_id, **{k: _jsonable(v) for k, v in zip(keys, row)}})
+    return {"column": column, "series": series}
+
+
+def compare_curve(dataset_ids: list[str], x: str, y: str, bins: int = 40,
+                  filters: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """特性カーブ比較: X をビン分割し、ビンごとの Y の平均と P10-P90 帯を返す。
+
+    例: 車速×エンジン回転数、スロットル×加速度など、時間軸に依存しない
+    物理特性をデータセット間で比較する。
+    """
+    if x == y:
+        raise QueryError("X と Y には別の列を指定してください")
+    bins = max(5, min(int(bins), 200))
+    tables = _compare_tables(dataset_ids, x, y)
+    qx, qy = _quote(x), _quote(y)
+
+    with db.duck() as con:
+        mns, mxs = [], []
+        for _, table, cols in tables:
+            if cols[x]["kind"] != "numeric" or cols[y]["kind"] != "numeric":
+                raise QueryError("特性カーブの X / Y には数値列を指定してください")
+            where, params = _build_where(filters, cols)
+            mn, mx = con.execute(
+                f"SELECT min({qx}), max({qx}) FROM {_quote(table)}{where}", params).fetchone()
+            if mn is not None:
+                mns.append(float(mn))
+                mxs.append(float(mx))
+        if not mns:
+            return {"centers": [], "series": []}
+        mn, mx = min(mns), max(mxs)
+        if mn == mx:
+            mx = mn + 1
+        width = (mx - mn) / bins
+
+        series = []
+        for ds_id, table, cols in tables:
+            where, params = _build_where(filters, cols)
+            rows = con.execute(
+                f"SELECT least(cast(floor(({qx} - ?) / ?) as int), ?) AS b, "
+                f"count({qy}), avg({qy}), quantile_cont({qy}, 0.1), quantile_cont({qy}, 0.9) "
+                f"FROM {_quote(table)}{where or ' WHERE 1=1'} "
+                f"AND {qx} IS NOT NULL AND {qy} IS NOT NULL GROUP BY b ORDER BY b",
+                [mn, width, bins - 1] + params,
+            ).fetchall()
+            mean = [None] * bins
+            p10 = [None] * bins
+            p90 = [None] * bins
+            count = [0] * bins
+            for b, cnt, avg, lo, hi in rows:
+                if b is not None and 0 <= b < bins:
+                    count[b] = cnt
+                    mean[b] = _jsonable(avg)
+                    p10[b] = _jsonable(lo)
+                    p90[b] = _jsonable(hi)
+            series.append({"dataset_id": ds_id, "mean": mean, "p10": p10, "p90": p90, "count": count})
+    centers = [mn + width * (i + 0.5) for i in range(bins)]
+    return {"x": x, "y": y, "centers": centers, "series": series}
+
+
+_CDF_PS = [i / 100 for i in range(101)]
+
+
+def compare_cdf(dataset_ids: list[str], column: str,
+                filters: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """累積分布 (CDF) 比較: 1% 刻みのパーセンタイル値を返す。"""
+    series = []
+    for ds_id, table, cols in _compare_tables(dataset_ids, column):
+        if cols[column]["kind"] != "numeric":
+            raise QueryError(f"信号には数値列を指定してください: {column}")
+        where, params = _build_where(filters, cols)
+        with db.duck() as con:
+            (values,) = con.execute(
+                f"SELECT quantile_cont({_quote(column)}, {_CDF_PS}) FROM {_quote(table)}{where}",
+                params).fetchone()
+        series.append({"dataset_id": ds_id,
+                       "values": [_jsonable(v) for v in values] if values is not None else None})
+    return {"column": column, "percents": [p * 100 for p in _CDF_PS], "series": series}
+
+
+MAX_DIFF_SIGNALS = 100
+_DIFF_PS = [i / 100 for i in range(1, 100)]
+
+
+def compare_diff(dataset_ids: list[str], baseline: str | None = None,
+                 filters: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """彼我差分サマリ: 共通する数値信号を全スキャンし、基準データセットとの
+    差を KS 統計量 (分布のずれ 0〜1) と平均差でランキングする。"""
+    tables = _compare_tables(dataset_ids)
+    baseline = baseline or dataset_ids[0]
+    if baseline not in dataset_ids:
+        raise QueryError("基準データセットが比較対象に含まれていません")
+
+    # 全データセットに共通する数値列
+    common = [c for c, m in tables[0][2].items()
+              if m["kind"] == "numeric" and
+              all(c in cols and cols[c]["kind"] == "numeric" for _, _, cols in tables[1:])]
+    truncated = len(common) > MAX_DIFF_SIGNALS
+    common = common[:MAX_DIFF_SIGNALS]
+    if not common:
+        raise QueryError("共通する数値列がありません")
+
+    # データセットごとに1クエリで全信号の平均と 1〜99% 分位点を取得
+    stats: dict[str, dict[str, tuple[Any, Any]]] = {}
+    for ds_id, table, cols in tables:
+        where, params = _build_where(filters, cols)
+        exprs = ", ".join(
+            f"avg({_quote(c)}), quantile_cont({_quote(c)}, {_DIFF_PS})" for c in common)
+        with db.duck() as con:
+            row = con.execute(f"SELECT {exprs} FROM {_quote(table)}{where}", params).fetchone()
+        stats[ds_id] = {c: (row[i * 2], row[i * 2 + 1]) for i, c in enumerate(common)}
+
+    def ks(qa: Any, qb: Any) -> float | None:
+        if qa is None or qb is None:
+            return None
+        a = np.asarray(qa, dtype=np.float64)
+        b = np.asarray(qb, dtype=np.float64)
+        if np.isnan(a).any() or np.isnan(b).any():
+            return None
+        grid = np.union1d(a, b)
+        ps = np.asarray(_DIFF_PS)
+        fa = np.interp(grid, a, ps, left=0.0, right=1.0)
+        fb = np.interp(grid, b, ps, left=0.0, right=1.0)
+        return round(float(np.max(np.abs(fa - fb))), 4)
+
+    signals = []
+    others = [d for d in dataset_ids if d != baseline]
+    for c in common:
+        base_avg, base_q = stats[baseline][c]
+        comps = []
+        for d in others:
+            avg, q = stats[d][c]
+            delta_pct = None
+            if base_avg is not None and avg is not None and abs(float(base_avg)) > 1e-12:
+                delta_pct = round((float(avg) - float(base_avg)) * 100 / abs(float(base_avg)), 2)
+            comps.append({"dataset_id": d, "avg": _jsonable(avg),
+                          "delta_pct": delta_pct, "ks": ks(base_q, q)})
+        max_ks = max((x["ks"] for x in comps if x["ks"] is not None), default=None)
+        signals.append({"name": c, "base_avg": _jsonable(base_avg), "comps": comps, "max_ks": max_ks})
+
+    signals.sort(key=lambda s: -(s["max_ks"] if s["max_ks"] is not None else -1))
+    return {"baseline": baseline, "signals": signals, "truncated": truncated}
 
 
 def _jsonable(v: Any) -> Any:

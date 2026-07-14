@@ -24,6 +24,11 @@ function toast(msg, kind = "ok") {
   toast._t = setTimeout(() => { el.className = ""; }, 3500);
 }
 
+// どこかで拾い損ねた非同期エラーも必ずユーザーに見せる (無反応にしない)
+window.addEventListener("unhandledrejection", (e) => {
+  toast(`エラー: ${e.reason?.message || e.reason}`, "error");
+});
+
 function debounce(fn, ms = 500) {
   let t;
   return (...args) => {
@@ -194,6 +199,42 @@ function closeTagModal(result) {
   const r = tagModal.resolve;
   tagModal.resolve = null;
   if (r) r(result);
+}
+
+// ---------- 名前入力モーダル (prompt はブラウザ設定で無効化されうるため使わない) ----------
+
+const nameModal = { resolve: null };
+
+function openNameDialog(title, value = "") {
+  return new Promise((resolve) => {
+    if (!nameModal.bound) {
+      nameModal.bound = true;
+      const close = (result) => {
+        $("#name-backdrop").hidden = true;
+        const r = nameModal.resolve;
+        nameModal.resolve = null;
+        if (r) r(result);
+      };
+      $("#namemodal-save").addEventListener("click", () => {
+        const v = $("#namemodal-input").value.trim();
+        if (!v) return toast("名前を入力してください", "error");
+        close(v);
+      });
+      $("#namemodal-cancel").addEventListener("click", () => close(null));
+      $("#name-backdrop").addEventListener("mousedown", (e) => {
+        if (e.target.id === "name-backdrop") close(null);
+      });
+      $("#namemodal-input").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") $("#namemodal-save").click();
+        if (e.key === "Escape") close(null);
+      });
+    }
+    nameModal.resolve = resolve;
+    $("#namemodal-title").textContent = title;
+    $("#namemodal-input").value = value;
+    $("#name-backdrop").hidden = false;
+    $("#namemodal-input").focus();
+  });
 }
 
 // ---------- ナビゲーション ----------
@@ -734,13 +775,14 @@ async function refreshLabelsets() {
 }
 
 function refreshLabelsetSelect() {
-  const dsId = $("#ts-dataset").value;
+  // ラベルセットはどのデータセットでも使える (同名信号があれば適用される)
   const sel = $("#ts-labelset");
+  const prev = sel.value;
   sel.innerHTML = '<option value="">— 選択 —</option>' +
     state.labelsets
-      .filter((ls) => !ls.dataset_id || ls.dataset_id === dsId)
       .map((ls) => `<option value="${ls.id}">${esc(ls.name)} (${ls.columns.length}信号)</option>`)
       .join("");
+  if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
 }
 
 $("#ts-labelset").addEventListener("change", () => {
@@ -748,23 +790,36 @@ $("#ts-labelset").addEventListener("change", () => {
   if (!ls) return;
   $("#ts-col-search").value = "";
   renderTsColumns();
-  setTsSelectedColumns(ls.columns);
-  toast(`ラベルセット「${ls.name}」を適用しました`);
+  // このデータセットに存在する信号だけ適用し、無いものは知らせる
+  const existing = new Set((state.ts.schema?.columns || []).map((c) => c.name));
+  const found = ls.columns.filter((c) => existing.has(c));
+  if (!found.length) {
+    return toast(`「${ls.name}」の信号はこのデータセットに存在しません`, "error");
+  }
+  setTsSelectedColumns(found);
+  const missing = ls.columns.length - found.length;
+  toast(`ラベルセット「${ls.name}」を適用しました` +
+    (missing ? ` (${missing} 信号はこのデータに無いためスキップ)` : ""));
   plotTimeseries(true);
 });
 
 $("#ts-save-labelset").addEventListener("click", async () => {
   const cols = tsSelectedColumns();
   if (!cols.length) return toast("信号を選択してからセット保存してください", "error");
-  const name = prompt("ラベルセット名を入力してください:");
+  const name = await openNameDialog(`ラベルセットを保存 (${cols.length} 信号)`);
   if (!name) return;
-  await api("/api/labelsets", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, dataset_id: $("#ts-dataset").value || null, columns: cols }),
-  });
-  toast(`ラベルセット「${name}」を保存しました`);
-  refreshLabelsets();
+  try {
+    const res = await api("/api/labelsets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, dataset_id: $("#ts-dataset").value || null, columns: cols }),
+    });
+    await refreshLabelsets();
+    $("#ts-labelset").value = res.id;  // 保存した実感が持てるよう即選択状態に
+    toast(`ラベルセット「${name}」を保存しました (${cols.length} 信号)`);
+  } catch (e) {
+    toast(`保存に失敗しました: ${e.message}`, "error");
+  }
 });
 
 // ---------- ビュー保存 ----------
@@ -772,7 +827,7 @@ $("#ts-save-labelset").addEventListener("click", async () => {
 $("#ts-save-view").addEventListener("click", async () => {
   const dsId = $("#ts-dataset").value;
   if (!dsId) return toast("データセットを選択してください", "error");
-  const name = prompt("ビュー名を入力してください:");
+  const name = await openNameDialog("時系列ビューを保存");
   if (!name) return;
   await api("/api/views", {
     method: "POST",
@@ -794,7 +849,7 @@ $("#ts-save-view").addEventListener("click", async () => {
 $("#st-save-view").addEventListener("click", async () => {
   const dsId = $("#st-dataset").value;
   if (!dsId) return toast("データセットを選択してください", "error");
-  const name = prompt("ビュー名を入力してください:");
+  const name = await openNameDialog("統計ビューを保存");
   if (!name) return;
   await api("/api/views", {
     method: "POST",
@@ -1364,7 +1419,7 @@ async function plotCmpCurve() {
 $("#cmp-save-view").addEventListener("click", async () => {
   const ids = cmpSelectedIds();
   if (ids.length < 2) return toast("データセットを2つ以上選択してください", "error");
-  const name = prompt("ビュー名を入力してください:");
+  const name = await openNameDialog("比較ビューを保存");
   if (!name) return;
   await api("/api/views", {
     method: "POST",

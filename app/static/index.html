@@ -417,6 +417,18 @@
 
 <!-- タグ編集モーダル -->
 <datalist id="tag-suggestions"></datalist>
+<!-- 名前入力モーダル (prompt の代替) -->
+<div id="name-backdrop" class="modal-backdrop" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true">
+    <h2 id="namemodal-title" style="margin:0 0 12px; font-size:16px;"></h2>
+    <input type="text" id="namemodal-input" style="width:100%;" placeholder="名前を入力">
+    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:18px;">
+      <button class="btn" id="namemodal-cancel">キャンセル</button>
+      <button class="btn primary" id="namemodal-save">保存</button>
+    </div>
+  </div>
+</div>
+
 <div id="modal-backdrop" class="modal-backdrop" hidden>
   <div class="modal-card" role="dialog" aria-modal="true">
     <h2 id="tagmodal-title" style="margin:0 0 12px; font-size:16px;"></h2>

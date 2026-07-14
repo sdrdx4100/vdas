@@ -111,7 +111,7 @@
   <section class="page" id="page-timeseries">
     <div class="page-header">
       <h1>時系列可視化</h1>
-      <p>X軸 (時間軸) と表示したい信号を選んでプロットします。大量データは自動で間引かれます。</p>
+      <p>データセットを選ぶと代表信号が自動でプロットされます。信号・条件を変えると即座に更新。大量データは自動で間引かれます。</p>
     </div>
 
     <div class="card">
@@ -125,7 +125,7 @@
         <label class="field">最大表示点数
           <input type="number" id="ts-maxpoints" value="5000" min="100" max="50000" step="100" style="width:110px;">
         </label>
-        <button class="btn primary" id="ts-plot">📈 プロット</button>
+        <button class="btn" id="ts-plot" title="手動で再描画">🔄 更新</button>
         <button class="btn" id="ts-save-view">ビューを保存</button>
       </div>
 
@@ -154,7 +154,7 @@
   <section class="page" id="page-stats">
     <div class="page-header">
       <h1>全体統計可視化</h1>
-      <p>データセット全体の統計量・分布・相関を俯瞰します。</p>
+      <p>データセットを選ぶと統計量・分布・散布図・相関が自動で計算されます。</p>
     </div>
 
     <div class="card">
@@ -162,7 +162,7 @@
         <label class="field">データセット
           <select id="st-dataset" style="min-width:220px;"></select>
         </label>
-        <button class="btn primary" id="st-load">📊 統計を計算</button>
+        <button class="btn" id="st-load" title="手動で再計算">🔄 更新</button>
         <button class="btn" id="st-save-view">ビューを保存</button>
       </div>
       <h3>フィルタ条件 (ヒストグラム・相関・散布図に適用)</h3>
@@ -225,7 +225,7 @@
   <section class="page" id="page-compare">
     <div class="page-header">
       <h1>比較可視化</h1>
-      <p>タグ (A社 / B社 など) で分類したデータセットを統計で比較します。記録時刻や走行内容が違っても、全体分布・グループ別 (ギア段など)・統計量で公平に比較できます。</p>
+      <p>データセットを2つ以上選ぶと自動で比較が始まります。記録時刻や走行内容が違っても、全体分布・グループ別 (ギア段など)・統計量で公平に比較できます。</p>
     </div>
 
     <div class="card">
@@ -246,7 +246,7 @@
         <label class="field">基準 (自社) データセット
           <select id="cmp-baseline" style="min-width:180px;"></select>
         </label>
-        <button class="btn primary" id="cmp-plot">⚖️ 比較する</button>
+        <button class="btn" id="cmp-plot" title="手動で再比較">🔄 更新</button>
         <button class="btn" id="cmp-save-view">ビューを保存</button>
       </div>
 

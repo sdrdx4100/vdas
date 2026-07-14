@@ -24,6 +24,14 @@ function toast(msg, kind = "ok") {
   toast._t = setTimeout(() => { el.className = ""; }, 3500);
 }
 
+function debounce(fn, ms = 500) {
+  let t;
+  return (...args) => {
+    clearTimeout(t);
+    t = setTimeout(() => fn(...args), ms);
+  };
+}
+
 function fmtNum(n) {
   return typeof n === "number" ? n.toLocaleString("ja-JP") : n;
 }
@@ -197,6 +205,18 @@ $$(".nav-item[data-page]").forEach((btn) => {
     $$(".page").forEach((p) => p.classList.remove("active"));
     $(`#page-${btn.dataset.page}`).classList.add("active");
     if (btn.dataset.page === "views") refreshViewsPage();
+    if (btn.dataset.page === "compare") autoSelectCmpDatasets();
+    // 単一データセットのタブ: 未選択なら最初のデータセットを自動選択して即描画。
+    // 選択済みでもスキーマ未読込 (別画面で値だけ変えた場合) なら読み込んで描画
+    if (["timeseries", "stats", "cluster"].includes(btn.dataset.page)) {
+      const page = btn.dataset.page;
+      const sel = { timeseries: "#ts-dataset", stats: "#st-dataset", cluster: "#cl-dataset" }[page];
+      const tab = { timeseries: state.ts, stats: state.st, cluster: state.cl }[page];
+      if (!$(sel).value && state.datasets.length) $(sel).value = state.datasets[0].id;
+      if ($(sel).value && tab.schema?.dataset?.id !== $(sel).value) {
+        $(sel).dispatchEvent(new Event("change"));
+      }
+    }
   });
 });
 
@@ -257,7 +277,9 @@ function renderDatasetTable() {
       <td class="num">${fmtNum(ds.column_count)}</td>
       <td class="num">${fmtSize(ds.file_size)}</td>
       <td>${esc(ds.created_at)}</td>
-      <td>
+      <td style="white-space:nowrap;">
+        <button class="btn subtle" data-act="ts" title="時系列タブで開く">📈 時系列</button>
+        <button class="btn subtle" data-act="stats" title="統計タブで開く">📊 統計</button>
         <button class="btn subtle" data-act="preview">プレビュー</button>
         <button class="btn subtle danger-text" data-act="delete">削除</button>
       </td>`;
@@ -268,6 +290,8 @@ function renderDatasetTable() {
       updateBulkBar();
     });
     tr.querySelector('[data-act="tags"]').addEventListener("click", () => editTags(ds));
+    tr.querySelector('[data-act="ts"]').addEventListener("click", () => openDatasetIn(ds.id, "timeseries"));
+    tr.querySelector('[data-act="stats"]').addEventListener("click", () => openDatasetIn(ds.id, "stats"));
     tr.querySelector('[data-act="preview"]').addEventListener("click", () => showPreview(ds));
     tr.querySelector('[data-act="delete"]').addEventListener("click", async () => {
       if (!confirm(`「${ds.name}」を削除しますか? (取り込んだテーブルと原本ファイルも削除されます)`)) return;
@@ -390,6 +414,14 @@ function tagChips(tags) {
   return (tags || []).map((t) => `<span class="chip accent">${esc(t)}</span>`).join(" ");
 }
 
+// データセットを指定タブで開く (選択→自動描画→タブ移動 まで1クリック)
+function openDatasetIn(dsId, page) {
+  const sel = { timeseries: "#ts-dataset", stats: "#st-dataset", cluster: "#cl-dataset" }[page];
+  // 先に値を入れてからタブ移動する (ナビ側の自動選択と競合しないように)
+  $(sel).value = dsId;
+  gotoPage(page);
+}
+
 async function refreshTags() {
   state.tags = await api("/api/tags");
   updateTagDatalist();
@@ -444,21 +476,29 @@ dropzone.addEventListener("drop", (e) => uploadFiles([...e.dataTransfer.files]))
 
 async function uploadFiles(files) {
   const tags = uploadTagEditor.get();
+  let lastDs = null;
   for (const file of files) {
     const fd = new FormData();
     fd.append("file", file);
     if (tags.length) fd.append("tags", JSON.stringify(tags));
     try {
       toast(`アップロード中: ${file.name} …`);
-      const ds = await api("/api/datasets/upload", { method: "POST", body: fd });
-      toast(`取り込み完了: ${ds.name} (${fmtNum(ds.row_count)}行)` +
+      lastDs = await api("/api/datasets/upload", { method: "POST", body: fd });
+      toast(`取り込み完了: ${lastDs.name} (${fmtNum(lastDs.row_count)}行)` +
         (tags.length ? ` — タグ: ${tags.join(", ")}` : ""));
     } catch (e) {
       toast(`エラー: ${e.message}`, "error");
     }
   }
   fileInput.value = "";
-  refreshDatasets();
+  await refreshDatasets();
+  // アップロードしたデータをすぐ見られるよう、未選択のタブには自動セット
+  // (タブを開いた瞬間に自動描画される)
+  if (lastDs) {
+    for (const sel of ["#ts-dataset", "#st-dataset", "#cl-dataset"]) {
+      if (!$(sel).value) $(sel).value = lastDs.id;
+    }
+  }
 }
 
 // ---------- スキーマ・フィルタ UI (共通) ----------
@@ -494,10 +534,14 @@ function renderFilters(containerId, tabState) {
     row.querySelector('[data-k="op"]').value = f.op || "eq";
     row.querySelector('[data-k="value"]').value = f.value ?? "";
     row.querySelectorAll("[data-k]").forEach((el) =>
-      el.addEventListener("change", () => { f[el.dataset.k] = el.value; }));
+      el.addEventListener("change", () => {
+        f[el.dataset.k] = el.value;
+        tabState.onChange?.();  // 条件変更で自動再描画
+      }));
     row.querySelector("button").addEventListener("click", () => {
       tabState.filters.splice(idx, 1);
       renderFilters(containerId, tabState);
+      tabState.onChange?.();
     });
     wrap.appendChild(row);
   });
@@ -510,6 +554,9 @@ function activeFilters(tabState) {
 }
 
 // ---------- 時系列タブ ----------
+
+const tsAutoPlot = debounce(() => plotTimeseries(true), 500);
+state.ts.onChange = tsAutoPlot;
 
 $("#ts-dataset").addEventListener("change", async () => {
   state.ts.schema = await loadSchema($("#ts-dataset").value);
@@ -524,9 +571,27 @@ $("#ts-dataset").addEventListener("change", async () => {
     const guess = cols.find((c) => c.kind === "temporal") ||
       cols.find((c) => /time|date|timestamp|時刻|時間/i.test(c.name)) || cols[0];
     if (guess) xSel.value = guess.name;
+    // 代表的な信号を自動選択して即描画 (速度・回転数らしい列 → 先頭の数値列)
+    const numeric = cols.filter((c) => c.kind === "numeric" && c.name !== xSel.value);
+    const picks = [];
+    for (const re of [/speed|km\/?h|車速/i, /rpm|回転/i]) {
+      const hit = numeric.find((c) => re.test(c.name) && !picks.includes(c.name));
+      if (hit) picks.push(hit.name);
+    }
+    for (const c of numeric) {
+      if (picks.length >= 2) break;
+      if (!picks.includes(c.name)) picks.push(c.name);
+    }
+    setTsSelectedColumns(picks);
+    plotTimeseries(true);
   }
   refreshLabelsetSelect();
 });
+
+// 信号チェック・X軸・点数の変更で自動再描画
+$("#ts-cols").addEventListener("change", tsAutoPlot);
+$("#ts-x").addEventListener("change", tsAutoPlot);
+$("#ts-maxpoints").addEventListener("change", tsAutoPlot);
 
 function renderTsColumns() {
   const wrap = $("#ts-cols");
@@ -563,15 +628,16 @@ $("#ts-add-filter").addEventListener("click", () => {
   renderFilters("#ts-filters", state.ts);
 });
 
-$("#ts-plot").addEventListener("click", plotTimeseries);
+$("#ts-plot").addEventListener("click", () => plotTimeseries());
 
-async function plotTimeseries() {
+async function plotTimeseries(auto = false) {
   const dsId = $("#ts-dataset").value;
   const x = $("#ts-x").value;
   const ys = tsSelectedColumns();
-  if (!dsId) return toast("データセットを選択してください", "error");
-  if (!x) return toast("X軸を選択してください", "error");
-  if (!ys.length) return toast("表示する信号を1つ以上選択してください", "error");
+  // 自動更新時は選択不足を黙ってスキップ (手動時のみ案内)
+  if (!dsId) return auto || toast("データセットを選択してください", "error");
+  if (!x) return auto || toast("X軸を選択してください", "error");
+  if (!ys.length) return auto || toast("表示する信号を1つ以上選択してください", "error");
 
   try {
     const res = await api(`/api/datasets/${dsId}/timeseries`, {
@@ -628,6 +694,7 @@ $("#ts-labelset").addEventListener("change", () => {
   renderTsColumns();
   setTsSelectedColumns(ls.columns);
   toast(`ラベルセット「${ls.name}」を適用しました`);
+  plotTimeseries(true);
 });
 
 $("#ts-save-labelset").addEventListener("click", async () => {
@@ -690,6 +757,14 @@ $("#st-save-view").addEventListener("click", async () => {
 
 // ---------- 統計タブ ----------
 
+// フィルタ変更ですべてのチャートを自動更新
+const stAutoAll = debounce(() => {
+  plotHistogram(true);
+  plotStScatter(true);
+  plotCorrelation(true);
+}, 600);
+state.st.onChange = stAutoAll;
+
 $("#st-dataset").addEventListener("change", async () => {
   state.st.schema = await loadSchema($("#st-dataset").value);
   state.st.filters = [];
@@ -700,7 +775,21 @@ $("#st-dataset").addEventListener("change", async () => {
   $("#sc-color").innerHTML = columnOptions(state.st.schema, { blank: true });
   const numeric = (state.st.schema?.columns || []).filter((c) => c.kind === "numeric");
   if (numeric.length >= 2) $("#sc-y").value = numeric[1].name;
+  if (numeric.length) $("#hist-col").value = numeric[0].name;
+  if (!state.st.schema) return;
+  // データセットを選んだ瞬間にすべて自動計算
+  loadSummary(true);
+  plotHistogram(true);
+  plotStScatter(true);
+  plotCorrelation(true);
 });
+
+// 各コントロールの変更でそのチャートを自動更新
+$("#hist-col").addEventListener("change", () => plotHistogram(true));
+$("#hist-bins").addEventListener("change", () => plotHistogram(true));
+$("#sc-x").addEventListener("change", () => plotStScatter(true));
+$("#sc-y").addEventListener("change", () => plotStScatter(true));
+$("#sc-color").addEventListener("change", () => plotStScatter(true));
 
 $("#st-add-filter").addEventListener("click", () => {
   if (!state.st.schema) return toast("先にデータセットを選択してください", "error");
@@ -708,11 +797,11 @@ $("#st-add-filter").addEventListener("click", () => {
   renderFilters("#st-filters", state.st);
 });
 
-$("#st-load").addEventListener("click", loadSummary);
+$("#st-load").addEventListener("click", () => loadSummary());
 
-async function loadSummary() {
+async function loadSummary(auto = false) {
   const dsId = $("#st-dataset").value;
-  if (!dsId) return toast("データセットを選択してください", "error");
+  if (!dsId) return auto || toast("データセットを選択してください", "error");
   try {
     const res = await api(`/api/datasets/${dsId}/summary`);
     const cols = ["column_name", "column_type", "count", "null_percentage",
@@ -733,10 +822,12 @@ async function loadSummary() {
   }
 }
 
-$("#hist-plot").addEventListener("click", async () => {
+$("#hist-plot").addEventListener("click", () => plotHistogram());
+
+async function plotHistogram(auto = false) {
   const dsId = $("#st-dataset").value;
   const column = $("#hist-col").value;
-  if (!dsId || !column) return toast("データセットと列を選択してください", "error");
+  if (!dsId || !column) return auto || toast("データセットと列を選択してください", "error");
   try {
     const res = await api(`/api/datasets/${dsId}/histogram`, {
       method: "POST",
@@ -763,12 +854,14 @@ $("#hist-plot").addEventListener("click", async () => {
   } catch (e) {
     toast(`エラー: ${e.message}`, "error");
   }
-});
+}
 
-$("#sc-plot").addEventListener("click", async () => {
+$("#sc-plot").addEventListener("click", () => plotStScatter());
+
+async function plotStScatter(auto = false) {
   const dsId = $("#st-dataset").value;
   const x = $("#sc-x").value, y = $("#sc-y").value, color = $("#sc-color").value || null;
-  if (!dsId || !x || !y) return toast("データセットとX/Y列を選択してください", "error");
+  if (!dsId || !x || !y) return auto || toast("データセットとX/Y列を選択してください", "error");
   try {
     const res = await api(`/api/datasets/${dsId}/scatter`, {
       method: "POST",
@@ -811,11 +904,13 @@ $("#sc-plot").addEventListener("click", async () => {
   } catch (e) {
     toast(`エラー: ${e.message}`, "error");
   }
-});
+}
 
-$("#corr-plot").addEventListener("click", async () => {
+$("#corr-plot").addEventListener("click", () => plotCorrelation());
+
+async function plotCorrelation(auto = false) {
   const dsId = $("#st-dataset").value;
-  if (!dsId) return toast("データセットを選択してください", "error");
+  if (!dsId) return auto || toast("データセットを選択してください", "error");
   try {
     const res = await api(`/api/datasets/${dsId}/correlation`, {
       method: "POST",
@@ -843,7 +938,7 @@ $("#corr-plot").addEventListener("click", async () => {
   } catch (e) {
     toast(`エラー: ${e.message}`, "error");
   }
-});
+}
 
 // ---------- 比較タブ ----------
 
@@ -886,7 +981,10 @@ function renderCmpDatasets() {
       `<span class="col-type">${fmtNum(ds.row_count)}行</span>`;
     const cb = label.querySelector("input");
     cb.checked = checked.includes(ds.id);
-    cb.addEventListener("change", updateCmpColumns);
+    cb.addEventListener("change", async () => {
+      await updateCmpColumns();
+      cmpAutoRun();  // 2件以上そろえば自動で比較開始
+    });
     wrap.appendChild(label);
   }
 }
@@ -958,7 +1056,23 @@ $("#cmp-add-filter").addEventListener("click", () => {
   renderFilters("#cmp-filters", state.cmp);
 });
 
-$("#cmp-plot").addEventListener("click", runCompare);
+const cmpAutoRun = debounce(() => runCompare(true), 600);
+state.cmp.onChange = cmpAutoRun;
+
+$("#cmp-plot").addEventListener("click", () => runCompare());
+["#cmp-signal", "#cmp-groupby", "#cmp-baseline"].forEach((sel) =>
+  $(sel).addEventListener("change", cmpAutoRun));
+$("#cmp-curve-x").addEventListener("change", () => plotCmpCurve().catch(() => {}));
+$("#cmp-curve-y").addEventListener("change", () => plotCmpCurve().catch(() => {}));
+
+// 比較タブを開いたとき、未選択ならデータセットを自動で選んで比較を始める
+function autoSelectCmpDatasets() {
+  if (cmpSelectedIds().length >= 2) return;
+  const boxes = $$("#cmp-datasets input");
+  if (boxes.length < 2) return;
+  boxes.slice(0, 2).forEach((el) => { el.checked = true; });
+  updateCmpColumns().then(cmpAutoRun);
+}
 
 const cmpDsName = (id) => state.datasets.find((d) => d.id === id)?.name || id;
 const swatch = (color) =>
@@ -970,11 +1084,11 @@ function fmtStat(v) {
   return v ?? "—";
 }
 
-async function runCompare() {
+async function runCompare(auto = false) {
   const ids = cmpSelectedIds();
   const signal = $("#cmp-signal").value;
-  if (ids.length < 2) return toast("データセットを2つ以上選択してください", "error");
-  if (!signal) return toast("比較する信号を選択してください", "error");
+  if (ids.length < 2) return auto || toast("データセットを2つ以上選択してください", "error");
+  if (!signal) return auto || toast("比較する信号を選択してください", "error");
   const ctx = {
     ids, signal,
     groupBy: $("#cmp-groupby").value,
@@ -1223,6 +1337,15 @@ $("#cl-dataset").addEventListener("change", async () => {
   $("#cl-charts").style.display = "none";
   $("#cl-status").innerHTML = "";
   renderClColumns();
+  // 走行状態のクラスタリングに使いやすい信号を自動で仮選択
+  if (state.cl.schema) {
+    const numeric = state.cl.schema.columns.filter((c) => c.kind === "numeric");
+    let picks = numeric
+      .filter((c) => /speed|km\/?h|車速|rpm|回転|throttle|スロットル|brake|ブレーキ|accel|加速/i.test(c.name))
+      .slice(0, 4).map((c) => c.name);
+    if (!picks.length) picks = numeric.slice(0, 3).map((c) => c.name);
+    $$("#cl-cols input").forEach((el) => { el.checked = picks.includes(el.value); });
+  }
 });
 
 function renderClColumns() {

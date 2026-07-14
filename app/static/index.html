@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VDAS — 車両データ可視化ダッシュボード</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230078d4'/%3E%3Ctext x='16' y='23' font-size='18' font-weight='700' font-family='Segoe UI,sans-serif' fill='%23fff' text-anchor='middle'%3EV%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/css/app.css">
+<script src="/vendor/plotly.min.js"></script>
+</head>
+<body>
+
+<nav class="nav-rail">
+  <div class="app-title">
+    <div class="logo">V</div>
+    <div>VDAS<small>車両データ解析スタジオ</small></div>
+  </div>
+  <button class="nav-item active" data-page="data">
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 5c0-1.1 3.1-2 7-2s7 .9 7 2v10c0 1.1-3.1 2-7 2s-7-.9-7-2V5Z"/><path d="M3 5c0 1.1 3.1 2 7 2s7-.9 7-2M3 10c0 1.1 3.1 2 7 2s7-.9 7-2"/></svg>
+    データ管理
+  </button>
+  <button class="nav-item" data-page="timeseries">
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 3v14h14"/><path d="M5 13l3.5-4 3 2.5L16 6"/></svg>
+    時系列可視化
+  </button>
+  <button class="nav-item" data-page="stats">
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="10" width="3" height="7" rx="0.5"/><rect x="8.5" y="5" width="3" height="12" rx="0.5"/><rect x="14" y="8" width="3" height="9" rx="0.5"/></svg>
+    統計可視化
+  </button>
+  <button class="nav-item" data-page="views">
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 3h10a1 1 0 0 1 1 1v13l-6-3.5L4 17V4a1 1 0 0 1 1-1Z"/></svg>
+    保存ビュー
+  </button>
+  <div class="nav-spacer"></div>
+  <button class="nav-item" id="theme-toggle">
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 3v1.5M10 15.5V17M3 10h1.5M15.5 10H17M5 5l1 1M14 14l1 1M15 5l-1 1M6 14l-1 1"/><circle cx="10" cy="10" r="3.5"/></svg>
+    テーマ切替
+  </button>
+</nav>
+
+<main class="main">
+
+  <!-- ================== データ管理 ================== -->
+  <section class="page active" id="page-data">
+    <div class="page-header">
+      <h1>データ管理</h1>
+      <p>CSV / Parquet ファイルをアップロードしてローカルに永続化します (DuckDB に取り込み高速クエリ可能)。</p>
+    </div>
+
+    <div class="card">
+      <div class="dropzone" id="dropzone">
+        <div class="icon">⬆️</div>
+        <div><strong>クリックまたはドラッグ&ドロップ</strong>でアップロード</div>
+        <div style="font-size:12px; margin-top:4px;">対応形式: .csv / .parquet</div>
+      </div>
+      <input type="file" id="file-input" accept=".csv,.parquet,.pq" multiple hidden>
+    </div>
+
+    <div class="card">
+      <h2>データセット一覧</h2>
+      <div class="table-wrap">
+        <table class="data" id="dataset-table">
+          <thead><tr>
+            <th>名前</th><th>元ファイル</th><th>行数</th><th>列数</th><th>サイズ</th><th>登録日時</th><th></th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="empty-note" id="dataset-empty">まだデータセットがありません。上のドロップゾーンからアップロードしてください。</div>
+    </div>
+
+    <div class="card" id="preview-card" style="display:none;">
+      <h2 id="preview-title">プレビュー</h2>
+      <div class="table-wrap" style="max-height:420px; overflow-y:auto;">
+        <table class="data" id="preview-table"><thead></thead><tbody></tbody></table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================== 時系列可視化 ================== -->
+  <section class="page" id="page-timeseries">
+    <div class="page-header">
+      <h1>時系列可視化</h1>
+      <p>X軸 (時間軸) と表示したい信号を選んでプロットします。大量データは自動で間引かれます。</p>
+    </div>
+
+    <div class="card">
+      <div class="controls-row">
+        <label class="field">データセット
+          <select id="ts-dataset" style="min-width:220px;"></select>
+        </label>
+        <label class="field">X軸 (時間軸)
+          <select id="ts-x" style="min-width:160px;"></select>
+        </label>
+        <label class="field">最大表示点数
+          <input type="number" id="ts-maxpoints" value="5000" min="100" max="50000" step="100" style="width:110px;">
+        </label>
+        <button class="btn primary" id="ts-plot">📈 プロット</button>
+        <button class="btn" id="ts-save-view">ビューを保存</button>
+      </div>
+
+      <h3>表示する信号 (Y軸)</h3>
+      <div class="controls-row" style="margin-bottom:8px;">
+        <input type="search" id="ts-col-search" placeholder="信号名で絞り込み…" style="flex:1; max-width:320px;">
+        <label class="field">ラベルセット
+          <select id="ts-labelset" style="min-width:180px;"><option value="">— 選択 —</option></select>
+        </label>
+        <button class="btn" id="ts-save-labelset">選択中の信号をセット保存</button>
+      </div>
+      <div class="col-picker" id="ts-cols"></div>
+
+      <h3>フィルタ条件</h3>
+      <div id="ts-filters"></div>
+      <button class="btn subtle" id="ts-add-filter">＋ 条件を追加</button>
+    </div>
+
+    <div class="card">
+      <div id="ts-meta" style="margin-bottom:8px;"></div>
+      <div class="chart tall" id="ts-chart"></div>
+    </div>
+  </section>
+
+  <!-- ================== 統計可視化 ================== -->
+  <section class="page" id="page-stats">
+    <div class="page-header">
+      <h1>全体統計可視化</h1>
+      <p>データセット全体の統計量・分布・相関を俯瞰します。</p>
+    </div>
+
+    <div class="card">
+      <div class="controls-row">
+        <label class="field">データセット
+          <select id="st-dataset" style="min-width:220px;"></select>
+        </label>
+        <button class="btn primary" id="st-load">📊 統計を計算</button>
+        <button class="btn" id="st-save-view">ビューを保存</button>
+      </div>
+      <h3>フィルタ条件 (ヒストグラム・相関・散布図に適用)</h3>
+      <div id="st-filters"></div>
+      <button class="btn subtle" id="st-add-filter">＋ 条件を追加</button>
+    </div>
+
+    <div class="card">
+      <h2>基本統計量</h2>
+      <div class="table-wrap" style="max-height:380px; overflow-y:auto;">
+        <table class="data" id="summary-table"><thead></thead><tbody></tbody></table>
+      </div>
+      <div class="empty-note" id="summary-empty">データセットを選んで「統計を計算」を押してください。</div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <h2>分布 (ヒストグラム)</h2>
+        <div class="controls-row" style="margin-bottom:10px;">
+          <label class="field">列
+            <select id="hist-col" style="min-width:160px;"></select>
+          </label>
+          <label class="field">ビン数
+            <input type="number" id="hist-bins" value="40" min="5" max="200" style="width:90px;">
+          </label>
+          <button class="btn" id="hist-plot">描画</button>
+        </div>
+        <div class="chart" id="hist-chart"></div>
+      </div>
+
+      <div class="card">
+        <h2>散布図</h2>
+        <div class="controls-row" style="margin-bottom:10px;">
+          <label class="field">X
+            <select id="sc-x" style="min-width:130px;"></select>
+          </label>
+          <label class="field">Y
+            <select id="sc-y" style="min-width:130px;"></select>
+          </label>
+          <label class="field">色分け
+            <select id="sc-color" style="min-width:130px;"><option value="">なし</option></select>
+          </label>
+          <button class="btn" id="sc-plot">描画</button>
+        </div>
+        <div class="chart" id="sc-chart"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>相関行列 (数値列)</h2>
+      <div class="controls-row" style="margin-bottom:10px;">
+        <button class="btn" id="corr-plot">相関を計算して描画</button>
+        <span class="chip" id="corr-note">数値列すべて (最大30列) を対象にします</span>
+      </div>
+      <div class="chart tall" id="corr-chart"></div>
+    </div>
+  </section>
+
+  <!-- ================== 保存ビュー ================== -->
+  <section class="page" id="page-views">
+    <div class="page-header">
+      <h1>保存ビュー・ラベルセット</h1>
+      <p>保存した可視化状態 (選択列・フィルタ条件) とラベルセットを管理します。</p>
+    </div>
+
+    <div class="card">
+      <h2>保存ビュー</h2>
+      <div class="table-wrap">
+        <table class="data" id="views-table">
+          <thead><tr><th>名前</th><th>種類</th><th>データセット</th><th>作成日時</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="empty-note" id="views-empty">保存ビューはまだありません。各タブの「ビューを保存」から保存できます。</div>
+    </div>
+
+    <div class="card">
+      <h2>ラベルセット</h2>
+      <div class="table-wrap">
+        <table class="data" id="labelsets-table">
+          <thead><tr><th>名前</th><th>信号数</th><th>信号</th><th>作成日時</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="empty-note" id="labelsets-empty">ラベルセットはまだありません。時系列タブで信号を選んで保存できます。</div>
+    </div>
+  </section>
+
+</main>
+
+<div id="toast"></div>
+<script src="/static/js/app.js"></script>
+</body>
+</html>

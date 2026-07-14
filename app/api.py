@@ -1,0 +1,176 @@
+"""REST API ルーター。"""
+from __future__ import annotations
+
+import json
+import uuid
+from typing import Any
+
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel, Field
+
+from . import db, ingest, queries
+
+router = APIRouter(prefix="/api")
+
+
+def _wrap(fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except (ingest.IngestError, queries.QueryError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ---------- データセット ----------
+
+@router.get("/datasets")
+def list_datasets():
+    return ingest.list_datasets()
+
+
+@router.post("/datasets/upload")
+async def upload_dataset(file: UploadFile = File(...), name: str | None = Form(None)):
+    return _wrap(ingest.ingest_file, file.file, file.filename or "upload.csv", name)
+
+
+@router.delete("/datasets/{dataset_id}")
+def delete_dataset(dataset_id: str):
+    _wrap(ingest.delete_dataset, dataset_id)
+    return {"ok": True}
+
+
+@router.get("/datasets/{dataset_id}/schema")
+def get_schema(dataset_id: str):
+    return _wrap(ingest.dataset_schema, dataset_id)
+
+
+@router.get("/datasets/{dataset_id}/preview")
+def get_preview(dataset_id: str, limit: int = 100):
+    return _wrap(queries.preview, dataset_id, min(limit, 500))
+
+
+@router.get("/datasets/{dataset_id}/summary")
+def get_summary(dataset_id: str):
+    return _wrap(queries.summary, dataset_id)
+
+
+class FilterSpec(BaseModel):
+    column: str
+    op: str
+    value: Any = None
+
+
+class TimeseriesRequest(BaseModel):
+    x: str
+    ys: list[str] = Field(min_length=1)
+    filters: list[FilterSpec] = []
+    max_points: int | None = None
+
+
+@router.post("/datasets/{dataset_id}/timeseries")
+def post_timeseries(dataset_id: str, req: TimeseriesRequest):
+    return _wrap(queries.timeseries, dataset_id, req.x, req.ys,
+                 [f.model_dump() for f in req.filters], req.max_points)
+
+
+class HistogramRequest(BaseModel):
+    column: str
+    bins: int = 40
+    filters: list[FilterSpec] = []
+
+
+@router.post("/datasets/{dataset_id}/histogram")
+def post_histogram(dataset_id: str, req: HistogramRequest):
+    return _wrap(queries.histogram, dataset_id, req.column, req.bins,
+                 [f.model_dump() for f in req.filters])
+
+
+class CorrelationRequest(BaseModel):
+    columns: list[str] | None = None
+    filters: list[FilterSpec] = []
+
+
+@router.post("/datasets/{dataset_id}/correlation")
+def post_correlation(dataset_id: str, req: CorrelationRequest):
+    return _wrap(queries.correlation, dataset_id, req.columns,
+                 [f.model_dump() for f in req.filters])
+
+
+class ScatterRequest(BaseModel):
+    x: str
+    y: str
+    color: str | None = None
+    filters: list[FilterSpec] = []
+    max_points: int | None = None
+
+
+@router.post("/datasets/{dataset_id}/scatter")
+def post_scatter(dataset_id: str, req: ScatterRequest):
+    return _wrap(queries.scatter, dataset_id, req.x, req.y, req.color,
+                 [f.model_dump() for f in req.filters], req.max_points)
+
+
+# ---------- 保存ビュー (可視化状態・条件の保存) ----------
+
+class SavedViewCreate(BaseModel):
+    name: str
+    kind: str  # 'timeseries' | 'stats'
+    dataset_id: str | None = None
+    config: dict[str, Any]
+
+
+@router.get("/views")
+def list_views():
+    rows = db.meta_query("SELECT * FROM saved_views ORDER BY created_at DESC")
+    for r in rows:
+        r["config"] = json.loads(r["config"])
+    return rows
+
+
+@router.post("/views")
+def create_view(req: SavedViewCreate):
+    if req.kind not in ("timeseries", "stats"):
+        raise HTTPException(status_code=400, detail="kind は timeseries か stats を指定してください")
+    view_id = uuid.uuid4().hex[:12]
+    db.meta_execute(
+        "INSERT INTO saved_views (id, name, kind, dataset_id, config) VALUES (?, ?, ?, ?, ?)",
+        (view_id, req.name, req.kind, req.dataset_id, json.dumps(req.config, ensure_ascii=False)),
+    )
+    return {"id": view_id}
+
+
+@router.delete("/views/{view_id}")
+def delete_view(view_id: str):
+    db.meta_execute("DELETE FROM saved_views WHERE id = ?", (view_id,))
+    return {"ok": True}
+
+
+# ---------- ラベルセット (見たい信号列のセット) ----------
+
+class LabelSetCreate(BaseModel):
+    name: str
+    dataset_id: str | None = None
+    columns: list[str] = Field(min_length=1)
+
+
+@router.get("/labelsets")
+def list_labelsets():
+    rows = db.meta_query("SELECT * FROM label_sets ORDER BY created_at DESC")
+    for r in rows:
+        r["columns"] = json.loads(r["columns"])
+    return rows
+
+
+@router.post("/labelsets")
+def create_labelset(req: LabelSetCreate):
+    ls_id = uuid.uuid4().hex[:12]
+    db.meta_execute(
+        "INSERT INTO label_sets (id, name, dataset_id, columns) VALUES (?, ?, ?, ?)",
+        (ls_id, req.name, req.dataset_id, json.dumps(req.columns, ensure_ascii=False)),
+    )
+    return {"id": ls_id}
+
+
+@router.delete("/labelsets/{labelset_id}")
+def delete_labelset(labelset_id: str):
+    db.meta_execute("DELETE FROM label_sets WHERE id = ?", (labelset_id,))
+    return {"ok": True}

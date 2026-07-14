@@ -1,0 +1,456 @@
+/* VDAS — Fluent Design (Microsoft) 基調のスタイル */
+
+:root {
+  color-scheme: light;
+  /* Fluent UI カラートークン */
+  --accent: #0078d4;
+  --accent-hover: #106ebe;
+  --accent-active: #005a9e;
+  --accent-text: #ffffff;
+  --mica-bg: #f3f3f3;
+  --layer-bg: rgba(255, 255, 255, 0.7);
+  --card-bg: #ffffff;
+  --card-border: rgba(0, 0, 0, 0.0578);
+  --card-shadow: 0 2px 4px rgba(0, 0, 0, 0.04), 0 0 2px rgba(0, 0, 0, 0.06);
+  --card-shadow-hover: 0 8px 16px rgba(0, 0, 0, 0.08), 0 0 2px rgba(0, 0, 0, 0.08);
+  --control-bg: #ffffff;
+  --control-border: rgba(0, 0, 0, 0.16);
+  --control-border-bottom: rgba(0, 0, 0, 0.44);
+  --subtle-hover: rgba(0, 0, 0, 0.037);
+  --subtle-active: rgba(0, 0, 0, 0.062);
+  --text-primary: #1b1a19;
+  --text-secondary: #605e5c;
+  --text-muted: #898781;
+  --divider: #e1e0d9;
+  --danger: #d03b3b;
+  --success: #0ca30c;
+
+  /* チャートトークン (検証済みパレット) */
+  --chart-surface: #fcfcfb;
+  --chart-grid: #e1e0d9;
+  --chart-axis: #c3c2b7;
+  --series-1: #2a78d6;
+  --series-2: #1baf7a;
+  --series-3: #eda100;
+  --series-4: #008300;
+  --series-5: #4a3aa7;
+  --series-6: #e34948;
+  --series-7: #e87ba4;
+  --series-8: #eb6834;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --accent: #479ef5;
+  --accent-hover: #62abf5;
+  --accent-active: #2886de;
+  --accent-text: #0b0b0b;
+  --mica-bg: #202020;
+  --layer-bg: rgba(40, 40, 40, 0.6);
+  --card-bg: #2b2b2b;
+  --card-border: rgba(255, 255, 255, 0.0837);
+  --card-shadow: 0 2px 4px rgba(0, 0, 0, 0.26), 0 0 2px rgba(0, 0, 0, 0.32);
+  --card-shadow-hover: 0 8px 16px rgba(0, 0, 0, 0.32), 0 0 2px rgba(0, 0, 0, 0.4);
+  --control-bg: #333333;
+  --control-border: rgba(255, 255, 255, 0.16);
+  --control-border-bottom: rgba(255, 255, 255, 0.42);
+  --subtle-hover: rgba(255, 255, 255, 0.06);
+  --subtle-active: rgba(255, 255, 255, 0.04);
+  --text-primary: #ffffff;
+  --text-secondary: #c3c2b7;
+  --text-muted: #898781;
+  --divider: #383835;
+  --danger: #e66767;
+  --success: #0ca30c;
+
+  --chart-surface: #1a1a19;
+  --chart-grid: #2c2c2a;
+  --chart-axis: #383835;
+  --series-1: #3987e5;
+  --series-2: #199e70;
+  --series-3: #c98500;
+  --series-4: #008300;
+  --series-5: #9085e9;
+  --series-6: #e66767;
+  --series-7: #d55181;
+  --series-8: #d95926;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  font-family: "Segoe UI", "Segoe UI Variable", system-ui, -apple-system, "Yu Gothic UI", "Meiryo", sans-serif;
+  font-size: 14px;
+  color: var(--text-primary);
+  background: var(--mica-bg);
+  display: flex;
+  overflow: hidden;
+}
+
+/* ---------- ナビゲーション (Fluent NavigationView) ---------- */
+
+.nav-rail {
+  width: 260px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 8px;
+  gap: 2px;
+  background: transparent;
+}
+
+.app-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px 18px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.app-title .logo {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, var(--accent), #38bdf8);
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.app-title small {
+  display: block;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 12px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  position: relative;
+}
+
+.nav-item:hover { background: var(--subtle-hover); }
+.nav-item.active { background: var(--subtle-active); font-weight: 600; }
+
+/* Fluent の選択インジケーター (左のアクセントピル) */
+.nav-item.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 16px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.nav-item svg { width: 18px; height: 18px; flex-shrink: 0; }
+
+.nav-spacer { flex: 1; }
+
+/* ---------- メイン領域 ---------- */
+
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--layer-bg);
+  border-top-left-radius: 10px;
+  border: 1px solid var(--card-border);
+  border-right: none;
+  border-bottom: none;
+  margin-top: 8px;
+  backdrop-filter: blur(20px);
+  overflow: hidden;
+}
+
+.page {
+  display: none;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px 28px;
+  overflow-y: auto;
+  height: 100%;
+}
+
+.page.active { display: flex; }
+
+.page-header h1 {
+  margin: 0 0 4px;
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.page-header p {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+/* ---------- カード ---------- */
+
+.card {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  box-shadow: var(--card-shadow);
+  padding: 16px 20px;
+}
+
+.card h2 {
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.card h3 {
+  margin: 16px 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+/* ---------- コントロール (Fluent スタイル) ---------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  min-height: 32px;
+  border-radius: 4px;
+  border: 1px solid var(--control-border);
+  background: var(--control-bg);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.btn:hover { background: var(--subtle-hover); }
+.btn:active { background: var(--subtle-active); }
+.btn:disabled { opacity: 0.45; cursor: default; }
+
+.btn.primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.btn.primary:hover { background: var(--accent-hover); }
+.btn.primary:active { background: var(--accent-active); }
+
+.btn.subtle { border-color: transparent; background: transparent; }
+.btn.subtle:hover { background: var(--subtle-hover); }
+
+.btn.danger-text { color: var(--danger); }
+
+select, input[type="text"], input[type="number"], input[type="search"] {
+  font: inherit;
+  color: var(--text-primary);
+  background: var(--control-bg);
+  border: 1px solid var(--control-border);
+  border-bottom-color: var(--control-border-bottom);
+  border-radius: 4px;
+  padding: 5px 10px;
+  min-height: 32px;
+  outline: none;
+}
+
+select:focus, input:focus {
+  border-bottom: 2px solid var(--accent);
+  padding-bottom: 4px;
+}
+
+label.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.controls-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+}
+
+/* ---------- アップロードドロップゾーン ---------- */
+
+.dropzone {
+  border: 2px dashed var(--control-border);
+  border-radius: 8px;
+  padding: 36px;
+  text-align: center;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.dropzone:hover, .dropzone.dragover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+
+.dropzone .icon { font-size: 28px; margin-bottom: 8px; }
+
+/* ---------- テーブル ---------- */
+
+.table-wrap { overflow-x: auto; }
+
+table.data {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+}
+
+table.data th, table.data td {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--divider);
+  white-space: nowrap;
+}
+
+table.data th {
+  font-weight: 600;
+  color: var(--text-secondary);
+  position: sticky;
+  top: 0;
+  background: var(--card-bg);
+}
+
+table.data tbody tr:hover { background: var(--subtle-hover); }
+
+table.data td.num { font-variant-numeric: tabular-nums; }
+
+/* ---------- 列選択リスト ---------- */
+
+.col-picker {
+  border: 1px solid var(--control-border);
+  border-radius: 4px;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--control-bg);
+}
+
+.col-picker label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.col-picker label:hover { background: var(--subtle-hover); }
+
+.col-picker input[type="checkbox"] { accent-color: var(--accent); }
+
+.col-type {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ---------- フィルタ行 ---------- */
+
+.filter-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.filter-row select, .filter-row input { min-width: 0; }
+
+/* ---------- チャート ---------- */
+
+.chart {
+  width: 100%;
+  min-height: 380px;
+  background: var(--chart-surface);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+}
+
+.chart.tall { min-height: 480px; }
+
+/* ---------- バッジ・チップ ---------- */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  border-radius: 10px;
+  font-size: 11px;
+  background: var(--subtle-active);
+  color: var(--text-secondary);
+}
+
+.chip.accent {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* ---------- トースト ---------- */
+
+#toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%) translateY(80px);
+  background: var(--card-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  box-shadow: var(--card-shadow-hover);
+  padding: 10px 20px;
+  opacity: 0;
+  transition: all 0.25s ease;
+  z-index: 100;
+  max-width: 70vw;
+}
+
+#toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+#toast.error { border-left: 3px solid var(--danger); }
+#toast.ok { border-left: 3px solid var(--success); }
+
+.empty-note {
+  color: var(--text-muted);
+  padding: 24px;
+  text-align: center;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 1100px) {
+  .grid-2 { grid-template-columns: 1fr; }
+  .nav-rail { width: 200px; }
+}

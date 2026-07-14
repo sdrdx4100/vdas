@@ -457,6 +457,84 @@ table.data td.num { font-variant-numeric: tabular-nums; }
 #toast.error { border-left: 3px solid var(--danger); }
 #toast.ok { border-left: 3px solid var(--success); }
 
+/* ---------- タグ編集 (チップエディタ・モーダル) ---------- */
+
+.tag-chip-area {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  min-height: 40px;
+  border: 1px solid var(--control-border);
+  border-bottom-color: var(--control-border-bottom);
+  border-radius: 4px;
+  background: var(--control-bg);
+}
+
+.tag-chip-area.inline { min-height: 34px; padding: 3px 8px; }
+
+.tag-chip-area:focus-within { border-bottom: 2px solid var(--accent); }
+
+.tag-chip-area input:focus { border: none; outline: none; padding-bottom: 5px; }
+
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 6px 3px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.tag-chip .tag-x {
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 50%;
+}
+
+.tag-chip .tag-x:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(2px);
+  display: grid;
+  place-items: center;
+  z-index: 60;
+}
+
+.modal-backdrop[hidden] { display: none; }
+
+.modal-card {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.24);
+  padding: 20px 24px;
+  width: min(500px, 92vw);
+}
+
+.bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
 .empty-note {
   color: var(--text-muted);
   padding: 24px;

@@ -59,16 +59,34 @@
       <div class="dropzone" id="dropzone">
         <div class="icon">⬆️</div>
         <div><strong>クリックまたはドラッグ&ドロップ</strong>でアップロード</div>
-        <div style="font-size:12px; margin-top:4px;">対応形式: .csv / .parquet</div>
+        <div style="font-size:12px; margin-top:4px;">対応形式: .csv / .parquet (複数ファイル可)</div>
       </div>
       <input type="file" id="file-input" accept=".csv,.parquet,.pq" multiple hidden>
+      <div class="controls-row" style="margin-top:12px; align-items:center;">
+        <span style="font-size:12px; color:var(--text-secondary);">アップロード時に付けるタグ:</span>
+        <div class="tag-chip-area inline" id="upload-tags" style="flex:1; max-width:560px;">
+          <input type="text" id="upload-tag-input" list="tag-suggestions"
+                 placeholder="タグ名を入力して Enter (例: A社)" style="border:none; min-height:24px; flex:1; min-width:140px; background:transparent;">
+        </div>
+      </div>
     </div>
 
     <div class="card">
       <h2>データセット一覧</h2>
+      <div class="controls-row" style="margin-bottom:10px;">
+        <span style="color:var(--text-secondary); font-size:12px;">タグで絞り込み:</span>
+        <div id="data-tag-filter" style="display:flex; gap:6px; flex-wrap:wrap;"></div>
+      </div>
+      <div id="bulk-bar" class="bulk-bar" hidden>
+        <strong id="bulk-count"></strong>
+        <button class="btn" id="bulk-add-tags">🏷️ タグを追加</button>
+        <button class="btn" id="bulk-remove-tags">タグを外す</button>
+        <button class="btn subtle" id="bulk-clear">選択解除</button>
+      </div>
       <div class="table-wrap">
         <table class="data" id="dataset-table">
           <thead><tr>
+            <th style="width:34px;"><input type="checkbox" id="select-all-ds" title="すべて選択" style="accent-color:var(--accent);"></th>
             <th>名前</th><th>タグ</th><th>元ファイル</th><th>行数</th><th>列数</th><th>サイズ</th><th>登録日時</th><th></th>
           </tr></thead>
           <tbody></tbody>
@@ -386,6 +404,27 @@
 </main>
 
 <div id="toast"></div>
+
+<!-- タグ編集モーダル -->
+<datalist id="tag-suggestions"></datalist>
+<div id="modal-backdrop" class="modal-backdrop" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true">
+    <h2 id="tagmodal-title" style="margin:0 0 12px; font-size:16px;"></h2>
+    <div class="tag-chip-area" id="tagmodal-chips">
+      <input type="text" id="tagmodal-input" list="tag-suggestions"
+             placeholder="タグ名を入力して Enter" style="border:none; min-height:24px; flex:1; min-width:140px; background:transparent;">
+    </div>
+    <div id="tagmodal-existing-wrap" style="margin-top:12px;">
+      <div style="font-size:12px; color:var(--text-secondary); margin-bottom:6px;">既存のタグをクリックで追加:</div>
+      <div id="tagmodal-existing" style="display:flex; gap:6px; flex-wrap:wrap;"></div>
+    </div>
+    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:18px;">
+      <button class="btn" id="tagmodal-cancel">キャンセル</button>
+      <button class="btn primary" id="tagmodal-save">保存</button>
+    </div>
+  </div>
+</div>
+
 <script src="/static/js/app.js"></script>
 </body>
 </html>

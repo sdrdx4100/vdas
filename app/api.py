@@ -28,8 +28,14 @@ def list_datasets():
 
 
 @router.post("/datasets/upload")
-async def upload_dataset(file: UploadFile = File(...), name: str | None = Form(None)):
-    return _wrap(ingest.ingest_file, file.file, file.filename or "upload.csv", name)
+async def upload_dataset(file: UploadFile = File(...), name: str | None = Form(None),
+                         tags: str | None = Form(None)):
+    try:
+        tag_list = json.loads(tags) if tags else []
+        assert isinstance(tag_list, list)
+    except (ValueError, AssertionError):
+        raise HTTPException(status_code=400, detail="tags は JSON 配列で指定してください")
+    return _wrap(ingest.ingest_file, file.file, file.filename or "upload.csv", name, tag_list)
 
 
 @router.delete("/datasets/{dataset_id}")
@@ -50,6 +56,17 @@ def put_tags(dataset_id: str, req: TagsUpdate):
 @router.get("/tags")
 def get_tags():
     return ingest.all_tags()
+
+
+class BulkTagsRequest(BaseModel):
+    dataset_ids: list[str] = Field(min_length=1)
+    add: list[str] = []
+    remove: list[str] = []
+
+
+@router.post("/datasets/tags/bulk")
+def post_bulk_tags(req: BulkTagsRequest):
+    return _wrap(ingest.bulk_update_tags, req.dataset_ids, req.add, req.remove)
 
 
 @router.get("/datasets/{dataset_id}/schema")

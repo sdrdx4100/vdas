@@ -84,7 +84,109 @@ const state = {
   cl: { schema: null, result: null },          // クラスタリングタブ
   labelsets: [],
   tags: [],
+  dsSelection: new Set(),      // データ管理タブの一括操作用チェック
+  dataTagFilter: new Set(),    // データ管理タブのタグ絞り込み
 };
+
+// ---------- チップ式タグエディタ ----------
+
+function chipEditor(areaEl, inputEl, onChange = () => {}) {
+  const tags = [];
+  const render = () => {
+    areaEl.querySelectorAll(".tag-chip").forEach((el) => el.remove());
+    for (const t of tags) {
+      const chip = document.createElement("span");
+      chip.className = "tag-chip";
+      chip.innerHTML = `${esc(t)}<button class="tag-x" title="削除" type="button">✕</button>`;
+      chip.querySelector(".tag-x").addEventListener("click", () => remove(t));
+      areaEl.insertBefore(chip, inputEl);
+    }
+    onChange([...tags]);
+  };
+  const add = (t) => {
+    t = (t || "").replace(/[,、]/g, "").trim();
+    if (t && !tags.includes(t)) { tags.push(t); render(); }
+  };
+  const remove = (t) => {
+    const i = tags.indexOf(t);
+    if (i >= 0) { tags.splice(i, 1); render(); }
+  };
+  const set = (list) => {
+    tags.length = 0;
+    for (const t of list || []) if (t && !tags.includes(t)) tags.push(t);
+    render();
+  };
+  inputEl.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === ",") {
+      e.preventDefault();
+      add(inputEl.value);
+      inputEl.value = "";
+    } else if (e.key === "Backspace" && !inputEl.value && tags.length) {
+      remove(tags[tags.length - 1]);
+    }
+  });
+  // datalist から選択したときは change で確定する
+  inputEl.addEventListener("change", () => {
+    if (inputEl.value.trim()) { add(inputEl.value); inputEl.value = ""; }
+  });
+  areaEl.addEventListener("click", (e) => { if (e.target === areaEl) inputEl.focus(); });
+  return { get: () => [...tags], set, add };
+}
+
+function updateTagDatalist() {
+  $("#tag-suggestions").innerHTML =
+    state.tags.map((t) => `<option value="${esc(t)}"></option>`).join("");
+}
+
+// ---------- タグ編集モーダル ----------
+
+const tagModal = { editor: null, resolve: null, suggestions: [] };
+
+function openTagEditor({ title, tags = [], suggestions = null }) {
+  return new Promise((resolve) => {
+    if (!tagModal.editor) {
+      tagModal.editor = chipEditor($("#tagmodal-chips"), $("#tagmodal-input"),
+        (current) => renderModalExisting(current));
+      $("#tagmodal-save").addEventListener("click", () => closeTagModal(tagModal.editor.get()));
+      $("#tagmodal-cancel").addEventListener("click", () => closeTagModal(null));
+      $("#modal-backdrop").addEventListener("mousedown", (e) => {
+        if (e.target.id === "modal-backdrop") closeTagModal(null);
+      });
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && !$("#modal-backdrop").hidden) closeTagModal(null);
+      });
+    }
+    tagModal.resolve = resolve;
+    tagModal.suggestions = suggestions ?? state.tags;
+    $("#tagmodal-title").textContent = title;
+    tagModal.editor.set(tags);
+    $("#tagmodal-input").value = "";
+    $("#modal-backdrop").hidden = false;
+    $("#tagmodal-input").focus();
+  });
+}
+
+function renderModalExisting(current) {
+  const wrap = $("#tagmodal-existing");
+  const cands = (tagModal.suggestions || []).filter((t) => !current.includes(t));
+  $("#tagmodal-existing-wrap").style.display = cands.length ? "" : "none";
+  wrap.innerHTML = "";
+  for (const t of cands) {
+    const chip = document.createElement("button");
+    chip.className = "chip clickable";
+    chip.type = "button";
+    chip.textContent = t;
+    chip.addEventListener("click", () => tagModal.editor.add(t));
+    wrap.appendChild(chip);
+  }
+}
+
+function closeTagModal(result) {
+  $("#modal-backdrop").hidden = true;
+  const r = tagModal.resolve;
+  tagModal.resolve = null;
+  if (r) r(result);
+}
 
 // ---------- ナビゲーション ----------
 
@@ -120,14 +222,36 @@ document.documentElement.dataset.theme =
 
 async function refreshDatasets() {
   state.datasets = await api("/api/datasets");
+  await refreshTags();
+  renderDatasetTable();
+  renderDataTagFilter();
+  fillDatasetSelect($("#ts-dataset"));
+  fillDatasetSelect($("#st-dataset"));
+  fillDatasetSelect($("#cl-dataset"));
+  renderCmpTagFilter();
+  renderCmpDatasets();
+}
+
+function visibleDatasets() {
+  const filter = state.dataTagFilter;
+  return state.datasets.filter(
+    (d) => !filter.size || (d.tags || []).some((t) => filter.has(t)));
+}
+
+function renderDatasetTable() {
   const tbody = $("#dataset-table tbody");
   tbody.innerHTML = "";
+  // 消えたデータセットの選択は掃除する
+  state.dsSelection = new Set(
+    [...state.dsSelection].filter((id) => state.datasets.some((d) => d.id === id)));
+  const list = visibleDatasets();
   $("#dataset-empty").style.display = state.datasets.length ? "none" : "";
-  for (const ds of state.datasets) {
+  for (const ds of list) {
     const tr = document.createElement("tr");
     tr.innerHTML = `
+      <td><input type="checkbox" data-act="select" style="accent-color:var(--accent);"></td>
       <td><strong>${esc(ds.name)}</strong></td>
-      <td>${tagChips(ds.tags)} <button class="btn subtle" data-act="tags" title="タグを編集" style="padding:2px 8px; min-height:24px;">✎</button></td>
+      <td>${tagChips(ds.tags)} <button class="btn subtle" data-act="tags" title="タグを編集" style="padding:2px 8px; min-height:24px;">🏷️ ✎</button></td>
       <td>${esc(ds.original_filename)}</td>
       <td class="num">${fmtNum(ds.row_count)}</td>
       <td class="num">${fmtNum(ds.column_count)}</td>
@@ -137,6 +261,12 @@ async function refreshDatasets() {
         <button class="btn subtle" data-act="preview">プレビュー</button>
         <button class="btn subtle danger-text" data-act="delete">削除</button>
       </td>`;
+    const cb = tr.querySelector('[data-act="select"]');
+    cb.checked = state.dsSelection.has(ds.id);
+    cb.addEventListener("change", () => {
+      cb.checked ? state.dsSelection.add(ds.id) : state.dsSelection.delete(ds.id);
+      updateBulkBar();
+    });
     tr.querySelector('[data-act="tags"]').addEventListener("click", () => editTags(ds));
     tr.querySelector('[data-act="preview"]').addEventListener("click", () => showPreview(ds));
     tr.querySelector('[data-act="delete"]').addEventListener("click", async () => {
@@ -147,13 +277,79 @@ async function refreshDatasets() {
     });
     tbody.appendChild(tr);
   }
-  fillDatasetSelect($("#ts-dataset"));
-  fillDatasetSelect($("#st-dataset"));
-  fillDatasetSelect($("#cl-dataset"));
-  await refreshTags();
-  renderCmpTagFilter();
-  renderCmpDatasets();
+  $("#select-all-ds").checked = list.length > 0 && list.every((d) => state.dsSelection.has(d.id));
+  updateBulkBar();
 }
+
+function renderDataTagFilter() {
+  const wrap = $("#data-tag-filter");
+  if (!state.tags.length) {
+    wrap.innerHTML = '<span style="color:var(--text-muted); font-size:12px;">タグ未登録</span>';
+    return;
+  }
+  wrap.innerHTML = "";
+  for (const tag of state.tags) {
+    const chip = document.createElement("button");
+    chip.className = "chip clickable" + (state.dataTagFilter.has(tag) ? " on" : "");
+    chip.textContent = tag;
+    chip.addEventListener("click", () => {
+      state.dataTagFilter.has(tag) ? state.dataTagFilter.delete(tag) : state.dataTagFilter.add(tag);
+      renderDataTagFilter();
+      renderDatasetTable();
+    });
+    wrap.appendChild(chip);
+  }
+}
+
+$("#select-all-ds").addEventListener("change", () => {
+  const list = visibleDatasets();
+  if ($("#select-all-ds").checked) list.forEach((d) => state.dsSelection.add(d.id));
+  else list.forEach((d) => state.dsSelection.delete(d.id));
+  renderDatasetTable();
+});
+
+function updateBulkBar() {
+  const n = state.dsSelection.size;
+  $("#bulk-bar").hidden = n === 0;
+  $("#bulk-count").textContent = `${n} 件選択中`;
+}
+
+$("#bulk-clear").addEventListener("click", () => {
+  state.dsSelection.clear();
+  renderDatasetTable();
+});
+
+$("#bulk-add-tags").addEventListener("click", async () => {
+  const ids = [...state.dsSelection];
+  const tags = await openTagEditor({ title: `${ids.length} 件のデータセットにタグを追加` });
+  if (!tags || !tags.length) return;
+  await api("/api/datasets/tags/bulk", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ dataset_ids: ids, add: tags }),
+  });
+  toast(`${ids.length} 件にタグを追加しました`);
+  refreshDatasets();
+});
+
+$("#bulk-remove-tags").addEventListener("click", async () => {
+  const ids = [...state.dsSelection];
+  const union = [...new Set(state.datasets
+    .filter((d) => state.dsSelection.has(d.id))
+    .flatMap((d) => d.tags || []))];
+  if (!union.length) return toast("選択中のデータセットにタグが付いていません", "error");
+  const tags = await openTagEditor({
+    title: `${ids.length} 件のデータセットからタグを外す`, suggestions: union,
+  });
+  if (!tags || !tags.length) return;
+  await api("/api/datasets/tags/bulk", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ dataset_ids: ids, remove: tags }),
+  });
+  toast(`${ids.length} 件からタグを外しました`);
+  refreshDatasets();
+});
 
 function tagChips(tags) {
   return (tags || []).map((t) => `<span class="chip accent">${esc(t)}</span>`).join(" ");
@@ -161,14 +357,14 @@ function tagChips(tags) {
 
 async function refreshTags() {
   state.tags = await api("/api/tags");
+  updateTagDatalist();
 }
 
 async function editTags(ds) {
-  const input = prompt(
-    `「${ds.name}」のタグをカンマ区切りで入力してください (例: A社, 高速走行):`,
-    (ds.tags || []).join(", "));
-  if (input == null) return;
-  const tags = input.split(/[,、]/).map((t) => t.trim()).filter(Boolean);
+  const tags = await openTagEditor({
+    title: `「${ds.name}」のタグを編集`, tags: ds.tags || [],
+  });
+  if (tags == null) return;
   await api(`/api/datasets/${ds.id}/tags`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -201,6 +397,8 @@ async function showPreview(ds) {
 
 const dropzone = $("#dropzone");
 const fileInput = $("#file-input");
+// アップロード時に自動で付けるタグ (チップ入力)
+const uploadTagEditor = chipEditor($("#upload-tags"), $("#upload-tag-input"));
 dropzone.addEventListener("click", () => fileInput.click());
 fileInput.addEventListener("change", () => uploadFiles([...fileInput.files]));
 ["dragover", "dragenter"].forEach((ev) =>
@@ -210,13 +408,16 @@ fileInput.addEventListener("change", () => uploadFiles([...fileInput.files]));
 dropzone.addEventListener("drop", (e) => uploadFiles([...e.dataTransfer.files]));
 
 async function uploadFiles(files) {
+  const tags = uploadTagEditor.get();
   for (const file of files) {
     const fd = new FormData();
     fd.append("file", file);
+    if (tags.length) fd.append("tags", JSON.stringify(tags));
     try {
       toast(`アップロード中: ${file.name} …`);
       const ds = await api("/api/datasets/upload", { method: "POST", body: fd });
-      toast(`取り込み完了: ${ds.name} (${fmtNum(ds.row_count)}行)`);
+      toast(`取り込み完了: ${ds.name} (${fmtNum(ds.row_count)}行)` +
+        (tags.length ? ` — タグ: ${tags.join(", ")}` : ""));
     } catch (e) {
       toast(`エラー: ${e.message}`, "error");
     }

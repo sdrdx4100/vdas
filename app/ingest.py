@@ -22,7 +22,17 @@ class IngestError(Exception):
     pass
 
 
-def ingest_file(fileobj: BinaryIO, original_filename: str, dataset_name: str | None = None) -> dict[str, Any]:
+def _clean_tags(tags: list[str] | None) -> list[str]:
+    seen: list[str] = []
+    for t in tags or []:
+        t = str(t).strip()
+        if t and t not in seen:
+            seen.append(t)
+    return seen
+
+
+def ingest_file(fileobj: BinaryIO, original_filename: str, dataset_name: str | None = None,
+                tags: list[str] | None = None) -> dict[str, Any]:
     ext = Path(original_filename).suffix.lower()
     if ext not in SUPPORTED_EXTENSIONS:
         raise IngestError(f"未対応の拡張子です: {ext} (CSV / Parquet のみ対応)")
@@ -52,10 +62,11 @@ def ingest_file(fileobj: BinaryIO, original_filename: str, dataset_name: str | N
 
     name = dataset_name or Path(original_filename).stem
     db.meta_execute(
-        "INSERT INTO datasets (id, name, original_filename, stored_path, table_name, row_count, column_count, file_size)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO datasets (id, name, original_filename, stored_path, table_name, row_count, column_count, file_size, tags)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (dataset_id, name, original_filename, str(stored_path), table_name,
-         row_count, len(columns), stored_path.stat().st_size),
+         row_count, len(columns), stored_path.stat().st_size,
+         json.dumps(_clean_tags(tags), ensure_ascii=False)),
     )
     return get_dataset(dataset_id)
 
@@ -78,10 +89,23 @@ def list_datasets() -> list[dict[str, Any]]:
 
 def update_tags(dataset_id: str, tags: list[str]) -> dict[str, Any]:
     get_dataset(dataset_id)  # 存在チェック
-    clean = [t.strip() for t in tags if t and t.strip()]
     db.meta_execute("UPDATE datasets SET tags = ? WHERE id = ?",
-                    (json.dumps(clean, ensure_ascii=False), dataset_id))
+                    (json.dumps(_clean_tags(tags), ensure_ascii=False), dataset_id))
     return get_dataset(dataset_id)
+
+
+def bulk_update_tags(dataset_ids: list[str], add: list[str] | None = None,
+                     remove: list[str] | None = None) -> dict[str, Any]:
+    """複数データセットにまとめてタグを追加 / 削除する。"""
+    add = _clean_tags(add)
+    remove = set(_clean_tags(remove))
+    for ds_id in dataset_ids:
+        ds = get_dataset(ds_id)
+        tags = [t for t in ds["tags"] if t not in remove]
+        tags += [t for t in add if t not in tags]
+        db.meta_execute("UPDATE datasets SET tags = ? WHERE id = ?",
+                        (json.dumps(tags, ensure_ascii=False), ds_id))
+    return {"updated": len(dataset_ids)}
 
 
 def all_tags() -> list[str]:

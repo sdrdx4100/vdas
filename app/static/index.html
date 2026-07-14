@@ -125,6 +125,12 @@
         <label class="field">最大表示点数
           <input type="number" id="ts-maxpoints" value="5000" min="100" max="50000" step="100" style="width:110px;">
         </label>
+        <label class="field">表示モード
+          <select id="ts-mode">
+            <option value="split">信号ごとに個別軸</option>
+            <option value="overlay">1つの軸に重ね書き</option>
+          </select>
+        </label>
         <button class="btn" id="ts-plot" title="手動で再描画">🔄 更新</button>
         <button class="btn" id="ts-save-view">ビューを保存</button>
       </div>

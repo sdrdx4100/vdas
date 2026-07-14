@@ -652,23 +652,79 @@ async function plotTimeseries(auto = false) {
     $("#ts-meta").innerHTML =
       `<span class="chip accent">${fmtNum(res.returned_rows)} 点表示</span> ` +
       `<span class="chip">全 ${fmtNum(res.total_rows)} 行${res.stride > 1 ? ` / ${res.stride} 行ごとに間引き` : ""}</span>`;
+    const mode = $("#ts-mode").value;
     renderChart("ts-chart", () => {
-      const traces = res.ys.map((y) => ({
-        type: "scattergl", mode: "lines", name: y,
-        x: res.data[res.x], y: res.data[y],
-        line: { width: 2 },
-        hovertemplate: `%{fullData.name}: %{y}<extra>${esc(res.x)}=%{x}</extra>`,
-      }));
-      Plotly.react("ts-chart", traces, baseLayout({
-        xaxis: Object.assign(baseLayout().xaxis, { title: { text: res.x } }),
-        hovermode: "x unified",
-        showlegend: res.ys.length >= 2,
-      }), PLOT_CONFIG);
+      if (mode === "split" && res.ys.length > 1) {
+        renderTsSplit(res);
+      } else {
+        renderTsOverlay(res);
+      }
     });
   } catch (e) {
     toast(`エラー: ${e.message}`, "error");
   }
 }
+
+// 重ね書き: 全信号を1つのY軸に描く
+function renderTsOverlay(res) {
+  const traces = res.ys.map((y) => ({
+    type: "scattergl", mode: "lines", name: y,
+    x: res.data[res.x], y: res.data[y],
+    line: { width: 2 },
+    hovertemplate: `%{fullData.name}: %{y}<extra>${esc(res.x)}=%{x}</extra>`,
+  }));
+  Plotly.react("ts-chart", traces, baseLayout({
+    height: 480,
+    xaxis: Object.assign(baseLayout().xaxis, { title: { text: res.x } }),
+    hovermode: "x unified",
+    showlegend: res.ys.length >= 2,
+  }), PLOT_CONFIG);
+}
+
+// 個別軸: 信号ごとに帯を積み重ね、X軸 (時間) は共有 (ズームも連動)
+function renderTsSplit(res) {
+  const ys = res.ys;
+  const k = ys.length;
+  const colors = seriesColors();
+  const gap = Math.min(0.03, 0.12 / k);
+  const bandH = (1 - gap * (k - 1)) / k;
+
+  const layout = baseLayout({
+    height: Math.max(460, 150 * k + 90),
+    showlegend: false,
+    hovermode: "x unified",
+    margin: { l: 64, r: 20, t: 24, b: 44 },
+  });
+  const gridStyle = layout.yaxis;
+  delete layout.yaxis;
+
+  const traces = ys.map((y, i) => ({
+    type: "scattergl", mode: "lines", name: y,
+    x: res.data[res.x], y: res.data[y],
+    yaxis: i === 0 ? "y" : `y${i + 1}`,
+    line: { width: 2, color: colors[i % colors.length] },
+    hovertemplate: `%{y}<extra>${esc(y)}</extra>`,
+  }));
+
+  ys.forEach((y, i) => {
+    const top = 1 - i * (bandH + gap);
+    layout[i === 0 ? "yaxis" : `yaxis${i + 1}`] = Object.assign({}, gridStyle, {
+      domain: [Math.max(0, top - bandH), top],
+      // 帯のタイトルを線と同じ色にして凡例の代わりにする
+      title: { text: y, font: { size: 11, color: colors[i % colors.length] } },
+      tickfont: { size: 10 },
+    });
+  });
+  // X軸 (時間) は1本を全帯で共有し、目盛りは最下段に付ける
+  layout.xaxis = Object.assign(layout.xaxis, {
+    domain: [0, 1],
+    anchor: k === 1 ? "y" : `y${k}`,
+    title: { text: res.x },
+  });
+  Plotly.react("ts-chart", traces, layout, PLOT_CONFIG);
+}
+
+$("#ts-mode").addEventListener("change", tsAutoPlot);
 
 // ---------- ラベルセット ----------
 
@@ -728,6 +784,7 @@ $("#ts-save-view").addEventListener("click", async () => {
         ys: tsSelectedColumns(),
         filters: activeFilters(state.ts),
         max_points: +$("#ts-maxpoints").value || 5000,
+        mode: $("#ts-mode").value,
       },
     }),
   });
@@ -1602,6 +1659,7 @@ async function loadView(v) {
     state.ts.filters = (c.filters || []).map((f) => ({ ...f }));
     renderFilters("#ts-filters", state.ts);
     if (c.max_points) $("#ts-maxpoints").value = c.max_points;
+    if (c.mode) $("#ts-mode").value = c.mode;
     plotTimeseries();
   } else {
     gotoPage("stats");

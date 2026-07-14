@@ -80,7 +80,9 @@ const state = {
   datasets: [],
   ts: { schema: null, filters: [] },   // 時系列タブ
   st: { schema: null, filters: [] },   // 統計タブ
+  cmp: { tagFilter: new Set(), schemas: {} },  // 比較タブ
   labelsets: [],
+  tags: [],
 };
 
 // ---------- ナビゲーション ----------
@@ -124,6 +126,7 @@ async function refreshDatasets() {
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td><strong>${esc(ds.name)}</strong></td>
+      <td>${tagChips(ds.tags)} <button class="btn subtle" data-act="tags" title="タグを編集" style="padding:2px 8px; min-height:24px;">✎</button></td>
       <td>${esc(ds.original_filename)}</td>
       <td class="num">${fmtNum(ds.row_count)}</td>
       <td class="num">${fmtNum(ds.column_count)}</td>
@@ -133,6 +136,7 @@ async function refreshDatasets() {
         <button class="btn subtle" data-act="preview">プレビュー</button>
         <button class="btn subtle danger-text" data-act="delete">削除</button>
       </td>`;
+    tr.querySelector('[data-act="tags"]').addEventListener("click", () => editTags(ds));
     tr.querySelector('[data-act="preview"]').addEventListener("click", () => showPreview(ds));
     tr.querySelector('[data-act="delete"]').addEventListener("click", async () => {
       if (!confirm(`「${ds.name}」を削除しますか? (取り込んだテーブルと原本ファイルも削除されます)`)) return;
@@ -144,6 +148,32 @@ async function refreshDatasets() {
   }
   fillDatasetSelect($("#ts-dataset"));
   fillDatasetSelect($("#st-dataset"));
+  await refreshTags();
+  renderCmpTagFilter();
+  renderCmpDatasets();
+}
+
+function tagChips(tags) {
+  return (tags || []).map((t) => `<span class="chip accent">${esc(t)}</span>`).join(" ");
+}
+
+async function refreshTags() {
+  state.tags = await api("/api/tags");
+}
+
+async function editTags(ds) {
+  const input = prompt(
+    `「${ds.name}」のタグをカンマ区切りで入力してください (例: A社, 高速走行):`,
+    (ds.tags || []).join(", "));
+  if (input == null) return;
+  const tags = input.split(/[,、]/).map((t) => t.trim()).filter(Boolean);
+  await api(`/api/datasets/${ds.id}/tags`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tags }),
+  });
+  toast("タグを更新しました");
+  refreshDatasets();
 }
 
 function fillDatasetSelect(sel) {
@@ -577,6 +607,209 @@ $("#corr-plot").addEventListener("click", async () => {
   }
 });
 
+// ---------- 比較タブ ----------
+
+function renderCmpTagFilter() {
+  const wrap = $("#cmp-tag-filter");
+  if (!state.tags.length) {
+    wrap.innerHTML = '<span style="color:var(--text-muted); font-size:12px;">タグ未登録 (データ管理タブの ✎ から付けられます)</span>';
+    return;
+  }
+  wrap.innerHTML = "";
+  for (const tag of state.tags) {
+    const chip = document.createElement("button");
+    chip.className = "chip clickable" + (state.cmp.tagFilter.has(tag) ? " on" : "");
+    chip.textContent = tag;
+    chip.addEventListener("click", () => {
+      state.cmp.tagFilter.has(tag) ? state.cmp.tagFilter.delete(tag) : state.cmp.tagFilter.add(tag);
+      renderCmpTagFilter();
+      renderCmpDatasets();
+    });
+    wrap.appendChild(chip);
+  }
+}
+
+function renderCmpDatasets() {
+  const wrap = $("#cmp-datasets");
+  const checked = cmpSelectedIds();
+  const filter = state.cmp.tagFilter;
+  const list = state.datasets.filter(
+    (d) => !filter.size || (d.tags || []).some((t) => filter.has(t)));
+  wrap.innerHTML = "";
+  if (!list.length) {
+    wrap.innerHTML = '<div class="empty-note">該当するデータセットがありません</div>';
+    return;
+  }
+  for (const ds of list) {
+    const label = document.createElement("label");
+    label.innerHTML =
+      `<input type="checkbox" value="${esc(ds.id)}"><span><strong>${esc(ds.name)}</strong></span>` +
+      `<span style="margin-left:6px;">${tagChips(ds.tags)}</span>` +
+      `<span class="col-type">${fmtNum(ds.row_count)}行</span>`;
+    const cb = label.querySelector("input");
+    cb.checked = checked.includes(ds.id);
+    cb.addEventListener("change", updateCmpColumns);
+    wrap.appendChild(label);
+  }
+}
+
+function cmpSelectedIds() {
+  return $$("#cmp-datasets input:checked").map((el) => el.value);
+}
+
+async function updateCmpColumns() {
+  const ids = cmpSelectedIds();
+  const sigSel = $("#cmp-signal"), xSel = $("#cmp-x");
+  const prevSig = sigSel.value, prevX = xSel.value;
+  if (!ids.length) { sigSel.innerHTML = ""; xSel.innerHTML = ""; return; }
+
+  for (const id of ids) {
+    if (!state.cmp.schemas[id]) state.cmp.schemas[id] = await loadSchema(id);
+  }
+  // 選択された全データセットに共通する列 (名前で照合)
+  const schemas = ids.map((id) => state.cmp.schemas[id]);
+  const common = schemas[0].columns.filter((c) =>
+    schemas.every((s) => s.columns.some((o) => o.name === c.name && o.kind === c.kind)));
+
+  const numeric = common.filter((c) => c.kind === "numeric");
+  sigSel.innerHTML = numeric.map((c) => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join("");
+  xSel.innerHTML = common.map((c) => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join("");
+  if ([...sigSel.options].some((o) => o.value === prevSig)) sigSel.value = prevSig;
+  if ([...xSel.options].some((o) => o.value === prevX)) {
+    xSel.value = prevX;
+  } else {
+    const guess = common.find((c) => c.kind === "temporal") ||
+      common.find((c) => /time|date|timestamp|時刻|時間/i.test(c.name)) || common[0];
+    if (guess) xSel.value = guess.name;
+  }
+}
+
+$("#cmp-plot").addEventListener("click", runCompare);
+
+async function runCompare() {
+  const ids = cmpSelectedIds();
+  const signal = $("#cmp-signal").value;
+  const x = $("#cmp-x").value;
+  if (ids.length < 2) return toast("データセットを2つ以上選択してください", "error");
+  if (!signal) return toast("比較する信号を選択してください", "error");
+  const normalize = $("#cmp-normalize").checked;
+  const dsName = (id) => state.datasets.find((d) => d.id === id)?.name || id;
+
+  try {
+    // --- 時系列比較 (データセットごとに1トレース) ---
+    const tsResults = await Promise.all(ids.map((id) =>
+      api(`/api/datasets/${id}/timeseries`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ x, ys: [signal], max_points: 3000 }),
+      })));
+    renderChart("cmp-ts-chart", () => {
+      const traces = tsResults.map((res, i) => {
+        let xs = res.data[x];
+        if (normalize && xs.length) {
+          if (typeof xs[0] === "number") {
+            const t0 = xs[0];
+            xs = xs.map((v) => v - t0);
+          } else {
+            const t0 = Date.parse(xs[0]);
+            xs = xs.map((v) => (Date.parse(v) - t0) / 1000);
+          }
+        }
+        return {
+          type: "scattergl", mode: "lines", name: dsName(ids[i]),
+          x: xs, y: res.data[signal], line: { width: 2 },
+        };
+      });
+      Plotly.react("cmp-ts-chart", traces, baseLayout({
+        xaxis: Object.assign(baseLayout().xaxis,
+          { title: { text: normalize ? `${x} (開始点からの経過)` : x } }),
+        yaxis: Object.assign(baseLayout().yaxis, { title: { text: signal } }),
+        hovermode: "x unified",
+        showlegend: true,
+      }), PLOT_CONFIG);
+    });
+
+    // --- 統計量比較テーブル (チャートより先に入れてグリッド幅を確定させる) ---
+    const summaries = await Promise.all(ids.map((id) => api(`/api/datasets/${id}/summary`)));
+    const stats = ["count", "min", "max", "avg", "std", "q25", "q50", "q75", "null_percentage"];
+    const headers = ["データセット", "件数", "最小", "最大", "平均", "標準偏差", "Q25", "中央値", "Q75", "NULL%"];
+    $("#cmp-stats-table thead").innerHTML =
+      `<tr>${headers.map((h) => `<th>${h}</th>`).join("")}</tr>`;
+    const colors = seriesColors();
+    $("#cmp-stats-table tbody").innerHTML = ids.map((id, i) => {
+      const row = summaries[i].stats.find((r) => r.column_name === signal) || {};
+      const cells = stats.map((k) => {
+        let v = row[k];
+        const n = Number(v);
+        if (v != null && Number.isFinite(n) && !Number.isInteger(n)) v = n.toPrecision(5);
+        return `<td class="num">${esc(v ?? "—")}</td>`;
+      }).join("");
+      return `<tr><td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${colors[i % colors.length]};margin-right:6px;"></span><strong>${esc(dsName(id))}</strong></td>${cells}</tr>`;
+    }).join("");
+    $("#cmp-stats-empty").style.display = "none";
+
+    // --- 分布比較 (共通ビン・割合) ---
+    const hist = await api("/api/compare/histogram", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dataset_ids: ids, column: signal, bins: 40 }),
+    });
+    renderChart("cmp-hist-chart", () => {
+      let traces;
+      if (hist.kind === "numeric") {
+        const centers = hist.edges.slice(0, -1).map((e, i) => (e + hist.edges[i + 1]) / 2);
+        traces = hist.series.map((s) => ({
+          type: "bar", x: centers, y: s.percents, name: dsName(s.dataset_id), opacity: 0.6,
+          hovertemplate: "%{x}<br>%{y}%<extra>%{fullData.name}</extra>",
+        }));
+      } else {
+        traces = hist.series.map((s) => ({
+          type: "bar", x: hist.labels, y: s.percents, name: dsName(s.dataset_id),
+          hovertemplate: "%{x}<br>%{y}%<extra>%{fullData.name}</extra>",
+        }));
+      }
+      Plotly.react("cmp-hist-chart", traces, baseLayout({
+        barmode: hist.kind === "numeric" ? "overlay" : "group",
+        bargap: 0.05,
+        xaxis: Object.assign(baseLayout().xaxis, { title: { text: signal } }),
+        yaxis: Object.assign(baseLayout().yaxis, { title: { text: "割合 (%)" } }),
+        showlegend: true,
+      }), PLOT_CONFIG);
+    });
+
+    // レイアウト確定後にチャートをコンテナ幅へ合わせ直す
+    requestAnimationFrame(() => {
+      ["cmp-ts-chart", "cmp-hist-chart"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el && el.data) Plotly.Plots.resize(el);
+      });
+    });
+  } catch (e) {
+    toast(`エラー: ${e.message}`, "error");
+  }
+}
+
+$("#cmp-save-view").addEventListener("click", async () => {
+  const ids = cmpSelectedIds();
+  if (ids.length < 2) return toast("データセットを2つ以上選択してください", "error");
+  const name = prompt("ビュー名を入力してください:");
+  if (!name) return;
+  await api("/api/views", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name, kind: "compare", dataset_id: null,
+      config: {
+        dataset_ids: ids,
+        signal: $("#cmp-signal").value,
+        x: $("#cmp-x").value,
+        normalize: $("#cmp-normalize").checked,
+      },
+    }),
+  });
+  toast(`ビュー「${name}」を保存しました`);
+});
+
 // ---------- 保存ビュータブ ----------
 
 async function refreshViewsPage() {
@@ -585,13 +818,17 @@ async function refreshViewsPage() {
   const vBody = $("#views-table tbody");
   vBody.innerHTML = "";
   $("#views-empty").style.display = views.length ? "none" : "";
+  const kindLabel = { timeseries: "時系列", stats: "統計", compare: "比較" };
   for (const v of views) {
-    const ds = state.datasets.find((d) => d.id === v.dataset_id);
+    const dsIds = v.kind === "compare" ? (v.config.dataset_ids || []) : [v.dataset_id];
+    const dsNames = dsIds
+      .map((id) => state.datasets.find((d) => d.id === id)?.name || id)
+      .filter(Boolean).join(" / ") || "—";
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td><strong>${esc(v.name)}</strong></td>
-      <td><span class="chip ${v.kind === "timeseries" ? "accent" : ""}">${v.kind === "timeseries" ? "時系列" : "統計"}</span></td>
-      <td>${esc(ds ? ds.name : v.dataset_id || "—")}</td>
+      <td><span class="chip ${v.kind === "timeseries" ? "accent" : ""}">${kindLabel[v.kind] || v.kind}</span></td>
+      <td>${esc(dsNames)}</td>
       <td>${esc(v.created_at)}</td>
       <td>
         <button class="btn subtle" data-act="load">読み込む</button>
@@ -630,6 +867,20 @@ async function refreshViewsPage() {
 
 async function loadView(v) {
   const c = v.config || {};
+  if (v.kind === "compare") {
+    gotoPage("compare");
+    state.cmp.tagFilter.clear();
+    renderCmpTagFilter();
+    renderCmpDatasets();
+    $$("#cmp-datasets input").forEach((el) => { el.checked = (c.dataset_ids || []).includes(el.value); });
+    await updateCmpColumns();
+    if (c.signal) $("#cmp-signal").value = c.signal;
+    if (c.x) $("#cmp-x").value = c.x;
+    $("#cmp-normalize").checked = c.normalize !== false;
+    runCompare();
+    toast(`ビュー「${v.name}」を読み込みました`);
+    return;
+  }
   if (v.kind === "timeseries") {
     gotoPage("timeseries");
     $("#ts-dataset").value = v.dataset_id || "";

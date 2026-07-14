@@ -392,6 +392,7 @@ table.data td.num { font-variant-numeric: tabular-nums; }
   background: var(--chart-surface);
   border: 1px solid var(--card-border);
   border-radius: 6px;
+  overflow: hidden;
 }
 
 .chart.tall { min-height: 480px; }
@@ -412,6 +413,24 @@ table.data td.num { font-variant-numeric: tabular-nums; }
 .chip.accent {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   color: var(--accent);
+  font-weight: 600;
+}
+
+.chip.clickable {
+  border: 1px solid var(--control-border);
+  background: var(--control-bg);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 12px;
+}
+
+.chip.clickable:hover { background: var(--subtle-hover); }
+
+.chip.clickable.on {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-text);
   font-weight: 600;
 }
 

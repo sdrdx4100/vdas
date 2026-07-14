@@ -27,6 +27,10 @@
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="10" width="3" height="7" rx="0.5"/><rect x="8.5" y="5" width="3" height="12" rx="0.5"/><rect x="14" y="8" width="3" height="9" rx="0.5"/></svg>
     統計可視化
   </button>
+  <button class="nav-item" data-page="compare">
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="10" height="10" rx="1.5"/><path d="M7 17h9a1 1 0 0 0 1-1V7"/></svg>
+    比較可視化
+  </button>
   <button class="nav-item" data-page="views">
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 3h10a1 1 0 0 1 1 1v13l-6-3.5L4 17V4a1 1 0 0 1 1-1Z"/></svg>
     保存ビュー
@@ -61,7 +65,7 @@
       <div class="table-wrap">
         <table class="data" id="dataset-table">
           <thead><tr>
-            <th>名前</th><th>元ファイル</th><th>行数</th><th>列数</th><th>サイズ</th><th>登録日時</th><th></th>
+            <th>名前</th><th>タグ</th><th>元ファイル</th><th>行数</th><th>列数</th><th>サイズ</th><th>登録日時</th><th></th>
           </tr></thead>
           <tbody></tbody>
         </table>
@@ -188,6 +192,57 @@
         <span class="chip" id="corr-note">数値列すべて (最大30列) を対象にします</span>
       </div>
       <div class="chart tall" id="corr-chart"></div>
+    </div>
+  </section>
+
+  <!-- ================== 比較可視化 ================== -->
+  <section class="page" id="page-compare">
+    <div class="page-header">
+      <h1>比較可視化</h1>
+      <p>タグ (A社 / B社 など) で分類したデータセットを重ねて比較します。信号は選択したデータセットに共通する列から選べます。</p>
+    </div>
+
+    <div class="card">
+      <h2>比較するデータセット</h2>
+      <div class="controls-row" style="margin-bottom:8px;">
+        <span style="color:var(--text-secondary); font-size:12px;">タグで絞り込み:</span>
+        <div id="cmp-tag-filter" style="display:flex; gap:6px; flex-wrap:wrap;"></div>
+      </div>
+      <div class="col-picker" id="cmp-datasets" style="max-height:180px;"></div>
+
+      <div class="controls-row" style="margin-top:14px;">
+        <label class="field">比較する信号
+          <select id="cmp-signal" style="min-width:200px;"></select>
+        </label>
+        <label class="field">X軸 (時系列比較用)
+          <select id="cmp-x" style="min-width:160px;"></select>
+        </label>
+        <label class="field" style="flex-direction:row; align-items:center; gap:6px; padding-bottom:7px;">
+          <input type="checkbox" id="cmp-normalize" checked style="accent-color:var(--accent);">
+          X軸を開始点からの経過に揃える
+        </label>
+        <button class="btn primary" id="cmp-plot">⚖️ 比較する</button>
+        <button class="btn" id="cmp-save-view">ビューを保存</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>時系列比較</h2>
+      <div class="chart tall" id="cmp-ts-chart"></div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <h2>分布比較 (割合 %)</h2>
+        <div class="chart" id="cmp-hist-chart"></div>
+      </div>
+      <div class="card">
+        <h2>統計量比較</h2>
+        <div class="table-wrap">
+          <table class="data" id="cmp-stats-table"><thead></thead><tbody></tbody></table>
+        </div>
+        <div class="empty-note" id="cmp-stats-empty">「比較する」を押すとここに統計量が並びます。</div>
+      </div>
     </div>
   </section>
 

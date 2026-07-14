@@ -38,6 +38,20 @@ def delete_dataset(dataset_id: str):
     return {"ok": True}
 
 
+class TagsUpdate(BaseModel):
+    tags: list[str]
+
+
+@router.put("/datasets/{dataset_id}/tags")
+def put_tags(dataset_id: str, req: TagsUpdate):
+    return _wrap(ingest.update_tags, dataset_id, req.tags)
+
+
+@router.get("/tags")
+def get_tags():
+    return ingest.all_tags()
+
+
 @router.get("/datasets/{dataset_id}/schema")
 def get_schema(dataset_id: str):
     return _wrap(ingest.dataset_schema, dataset_id)
@@ -109,11 +123,24 @@ def post_scatter(dataset_id: str, req: ScatterRequest):
                  [f.model_dump() for f in req.filters], req.max_points)
 
 
+# ---------- データセット比較 ----------
+
+class CompareHistogramRequest(BaseModel):
+    dataset_ids: list[str] = Field(min_length=2)
+    column: str
+    bins: int = 40
+
+
+@router.post("/compare/histogram")
+def post_compare_histogram(req: CompareHistogramRequest):
+    return _wrap(queries.compare_histogram, req.dataset_ids, req.column, req.bins)
+
+
 # ---------- 保存ビュー (可視化状態・条件の保存) ----------
 
 class SavedViewCreate(BaseModel):
     name: str
-    kind: str  # 'timeseries' | 'stats'
+    kind: str  # 'timeseries' | 'stats' | 'compare'
     dataset_id: str | None = None
     config: dict[str, Any]
 
@@ -128,8 +155,8 @@ def list_views():
 
 @router.post("/views")
 def create_view(req: SavedViewCreate):
-    if req.kind not in ("timeseries", "stats"):
-        raise HTTPException(status_code=400, detail="kind は timeseries か stats を指定してください")
+    if req.kind not in ("timeseries", "stats", "compare"):
+        raise HTTPException(status_code=400, detail="kind は timeseries / stats / compare を指定してください")
     view_id = uuid.uuid4().hex[:12]
     db.meta_execute(
         "INSERT INTO saved_views (id, name, kind, dataset_id, config) VALUES (?, ?, ?, ?, ?)",

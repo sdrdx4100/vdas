@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS datasets (
     row_count INTEGER NOT NULL,
     column_count INTEGER NOT NULL,
     file_size INTEGER NOT NULL,
+    tags TEXT NOT NULL DEFAULT '[]',  -- JSON: タグ文字列の配列 (例: ["A社", "高速走行"])
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS saved_views (
@@ -60,7 +61,15 @@ def init() -> None:
         _meta_conn = sqlite3.connect(str(META_DB_PATH), check_same_thread=False)
         _meta_conn.row_factory = sqlite3.Row
         _meta_conn.executescript(META_SCHEMA)
+        _migrate(_meta_conn)
         _meta_conn.commit()
+
+
+def _migrate(con: sqlite3.Connection) -> None:
+    """旧バージョンの DB に不足している列を追加する。"""
+    cols = {r[1] for r in con.execute("PRAGMA table_info(datasets)").fetchall()}
+    if "tags" not in cols:
+        con.execute("ALTER TABLE datasets ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'")
 
 
 @contextmanager

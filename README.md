@@ -10,9 +10,10 @@
 
 | タブ | 内容 |
 |---|---|
-| データ管理 | CSV / Parquet のドラッグ&ドロップアップロード。原本は `data/uploads/` に保存、DuckDB テーブルとして取り込み。プレビュー・削除。 |
+| データ管理 | CSV / Parquet のドラッグ&ドロップアップロード。原本は `data/uploads/` に保存、DuckDB テーブルとして取り込み。**タグ付け** (A社 / B社 / J1939 など)・プレビュー・削除。 |
 | 時系列可視化 | X軸(時間軸) + 複数信号の重ね描き。フィルタ条件、自動間引き (最大表示点数指定)、信号名検索。 |
 | 全体統計可視化 | 基本統計量 (SUMMARIZE)、ヒストグラム、散布図 (カテゴリ色分け)、相関行列ヒートマップ。 |
+| 比較可視化 | タグで絞り込んだ複数データセットを重ねて比較。時系列オーバーレイ (開始点への時刻正規化対応)、共通ビンでの分布比較 (割合%)、統計量の並列比較。 |
 | 保存ビュー | 可視化状態 (選択列・フィルタ条件・チャート設定) を名前を付けて保存・復元。**ラベルセット** (見たい信号のセット) も保存可能。 |
 
 ライト / ダークテーマ切替に対応しています。
@@ -60,8 +61,10 @@ data/
 主要エンドポイント:
 
 - `POST /api/datasets/upload` — ファイル取り込み
+- `PUT  /api/datasets/{id}/tags` — タグ更新 / `GET /api/tags` — 全タグ一覧
 - `POST /api/datasets/{id}/timeseries` — 時系列データ取得 (フィルタ・間引き対応)
 - `GET  /api/datasets/{id}/summary` — 全列の基本統計量
 - `POST /api/datasets/{id}/histogram` / `correlation` / `scatter`
-- `GET/POST/DELETE /api/views` — 保存ビュー
+- `POST /api/compare/histogram` — 複数データセットを共通ビンで分布比較
+- `GET/POST/DELETE /api/views` — 保存ビュー (時系列 / 統計 / 比較)
 - `GET/POST/DELETE /api/labelsets` — ラベルセット

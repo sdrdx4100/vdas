@@ -231,6 +231,76 @@ def scatter(dataset_id: str, x: str, y: str, color: str | None = None,
     return {"total_rows": total, "returned_rows": len(rows), "data": out}
 
 
+def compare_histogram(dataset_ids: list[str], column: str, bins: int = 40) -> dict[str, Any]:
+    """複数データセットを共通のビン境界で集計し、分布を比較可能にする。
+
+    データセットごとの行数差を吸収するため、割合 (%) も返す。
+    """
+    if len(dataset_ids) < 2:
+        raise QueryError("比較には2つ以上のデータセットを選択してください")
+    bins = max(5, min(int(bins), 200))
+
+    tables: list[tuple[str, str, dict[str, dict[str, Any]]]] = []
+    for ds_id in dataset_ids:
+        table, cols = _schema_map(ds_id)
+        _check_columns(cols, column)
+        tables.append((ds_id, table, cols))
+
+    if any(cols[column]["kind"] != "numeric" for _, _, cols in tables):
+        # カテゴリ列: 全データセット合算の上位カテゴリを共通ラベルにする
+        totals: dict[str, int] = {}
+        per_ds: dict[str, dict[str, int]] = {}
+        with db.duck() as con:
+            for ds_id, table, _ in tables:
+                rows = con.execute(
+                    f'SELECT CAST({_quote(column)} AS VARCHAR) AS v, count(*) FROM {_quote(table)} GROUP BY v'
+                ).fetchall()
+                per_ds[ds_id] = {r[0]: r[1] for r in rows}
+                for k, c in per_ds[ds_id].items():
+                    totals[k] = totals.get(k, 0) + c
+        labels = [k for k, _ in sorted(totals.items(), key=lambda x: -x[1])[:40]]
+        series = []
+        for ds_id, _, _ in tables:
+            counts = [per_ds[ds_id].get(l, 0) for l in labels]
+            n = sum(per_ds[ds_id].values()) or 1
+            series.append({"dataset_id": ds_id, "counts": counts,
+                           "percents": [round(c * 100 / n, 3) for c in counts]})
+        return {"kind": "categorical", "labels": labels, "series": series}
+
+    # 数値列: 全データセット共通の min/max からビン境界を決める
+    with db.duck() as con:
+        mns, mxs = [], []
+        for _, table, _ in tables:
+            mn, mx = con.execute(
+                f"SELECT min({_quote(column)}), max({_quote(column)}) FROM {_quote(table)}").fetchone()
+            if mn is not None:
+                mns.append(float(mn))
+                mxs.append(float(mx))
+        if not mns:
+            return {"kind": "numeric", "edges": [], "series": []}
+        mn, mx = min(mns), max(mxs)
+        if mn == mx:
+            mx = mn + 1
+        width = (mx - mn) / bins
+        q = _quote(column)
+        series = []
+        for ds_id, table, _ in tables:
+            rows = con.execute(
+                f"SELECT least(cast(floor(({q} - ?) / ?) as int), ?) AS b, count(*) "
+                f"FROM {_quote(table)} WHERE {q} IS NOT NULL GROUP BY b ORDER BY b",
+                [mn, width, bins - 1],
+            ).fetchall()
+            counts = [0] * bins
+            for b, c in rows:
+                if b is not None and 0 <= b < bins:
+                    counts[b] = c
+            n = sum(counts) or 1
+            series.append({"dataset_id": ds_id, "counts": counts,
+                           "percents": [round(c * 100 / n, 3) for c in counts]})
+    edges = [mn + width * i for i in range(bins + 1)]
+    return {"kind": "numeric", "edges": edges, "series": series}
+
+
 def _jsonable(v: Any) -> Any:
     if v is None or isinstance(v, (int, float, str, bool)):
         if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):

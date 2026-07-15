@@ -3,12 +3,12 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
-from . import clustering, db, ingest, queries
+from . import clustering, cohorts, db, ingest, queries
 
 router = APIRouter(prefix="/api")
 
@@ -247,6 +247,86 @@ class CompareDiffRequest(BaseModel):
 def post_compare_diff(req: CompareDiffRequest):
     return _wrap(queries.compare_diff, req.dataset_ids, req.baseline,
                  [f.model_dump() for f in req.filters])
+
+
+# ---------- タグ比較グループ ----------
+
+class CohortSpec(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    tags: list[str] = Field(min_length=1)
+    match: Literal["all", "any"] = "all"
+
+
+class CohortResolveRequest(BaseModel):
+    cohorts: list[CohortSpec] = Field(min_length=2)
+
+
+class CohortHistogramRequest(CohortResolveRequest):
+    column: str
+    bins: int = 40
+    filters: list[FilterSpec] = Field(default_factory=list)
+
+
+class CohortHistogram2DRequest(CohortResolveRequest):
+    x: str
+    y: str
+    bins_x: int = 40
+    bins_y: int = 40
+    filters: list[FilterSpec] = Field(default_factory=list)
+
+
+class CohortTransitionsRequest(CohortResolveRequest):
+    state_column: str
+    order_by: str
+    filters: list[FilterSpec] = Field(default_factory=list)
+    denominator_column: str | None = None
+    denominator_scale: float = Field(default=1.0, gt=0)
+
+
+def _cohort_dicts(req: CohortResolveRequest) -> list[dict[str, Any]]:
+    return [cohort.model_dump() for cohort in req.cohorts]
+
+
+@router.post("/compare/cohorts/resolve")
+def post_resolve_cohorts(req: CohortResolveRequest):
+    return _wrap(cohorts.resolve_cohorts, _cohort_dicts(req))
+
+
+@router.post("/compare/cohorts/histogram")
+def post_cohort_histogram(req: CohortHistogramRequest):
+    return _wrap(
+        cohorts.compare_histogram,
+        _cohort_dicts(req),
+        req.column,
+        req.bins,
+        [filter_spec.model_dump() for filter_spec in req.filters],
+    )
+
+
+@router.post("/compare/cohorts/histogram2d")
+def post_cohort_histogram2d(req: CohortHistogram2DRequest):
+    return _wrap(
+        cohorts.compare_histogram2d,
+        _cohort_dicts(req),
+        req.x,
+        req.y,
+        req.bins_x,
+        req.bins_y,
+        [filter_spec.model_dump() for filter_spec in req.filters],
+    )
+
+
+@router.post("/compare/cohorts/transitions")
+def post_cohort_transitions(req: CohortTransitionsRequest):
+    return _wrap(
+        cohorts.compare_transitions,
+        _cohort_dicts(req),
+        req.state_column,
+        req.order_by,
+        [filter_spec.model_dump() for filter_spec in req.filters],
+        req.denominator_column,
+        req.denominator_scale,
+    )
 
 
 # ---------- 保存ビュー (可視化状態・条件の保存) ----------

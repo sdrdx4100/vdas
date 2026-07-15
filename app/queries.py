@@ -271,7 +271,7 @@ def compare_histogram(dataset_ids: list[str], column: str, bins: int = 40,
         labels = [k for k, _ in sorted(totals.items(), key=lambda x: -x[1])[:40]]
         series = []
         for ds_id, _, _ in tables:
-            counts = [per_ds[ds_id].get(l, 0) for l in labels]
+            counts = [per_ds[ds_id].get(label, 0) for label in labels]
             n = sum(per_ds[ds_id].values()) or 1
             series.append({"dataset_id": ds_id, "counts": counts,
                            "percents": [round(c * 100 / n, 3) for c in counts]})

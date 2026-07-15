@@ -1,0 +1,13 @@
+/* アプリ全体で共有する状態 */
+
+export const state = {
+  datasets: [],
+  ts: { schema: null, filters: [] },   // 時系列タブ
+  st: { schema: null, filters: [] },   // 統計タブ
+  cmp: { tagFilter: new Set(), schemas: {}, schema: null, filters: [], last: null },  // 比較タブ
+  cl: { schema: null, result: null },          // クラスタリングタブ
+  labelsets: [],
+  tags: [],
+  dsSelection: new Set(),      // データ管理タブの一括操作用チェック
+  dataTagFilter: new Set(),    // データ管理タブのタグ絞り込み
+};

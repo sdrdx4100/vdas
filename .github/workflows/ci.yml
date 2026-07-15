@@ -24,5 +24,8 @@ jobs:
         run: python -m pip install -r requirements-dev.txt
       - name: Lint
         run: ruff check app scripts tests run.py
+      - name: Check JavaScript syntax
+        shell: bash
+        run: find app/static/js -name '*.js' -print0 | xargs -0 -n1 node --check
       - name: Test
         run: pytest --cov=app --cov-report=term-missing --cov-fail-under=75

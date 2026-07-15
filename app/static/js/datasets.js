@@ -3,7 +3,7 @@ import { $, $$, api, toast, fmtNum, fmtSize, esc } from "./api.js";
 import { state } from "./state.js";
 import { chipEditor, openTagEditor, updateTagDatalist } from "./modals.js";
 import { gotoPage } from "./nav.js";
-import { renderCmpTagFilter, renderCmpDatasets } from "./compare.js";
+import { renderCmpTagFilter, renderCmpDatasets, renderCmpCohorts } from "./compare.js";
 import { refreshLabelsets } from "./views.js";
 
 // ---------- データセット一覧 ----------
@@ -18,6 +18,7 @@ export async function refreshDatasets() {
   fillDatasetSelect($("#cl-dataset"));
   renderCmpTagFilter();
   renderCmpDatasets();
+  renderCmpCohorts();
 }
 
 export function visibleDatasets() {

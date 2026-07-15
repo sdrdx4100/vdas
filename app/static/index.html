@@ -235,21 +235,50 @@
     </div>
 
     <div class="card">
-      <h2>比較するデータセット</h2>
-      <div class="controls-row" style="margin-bottom:8px;">
-        <span style="color:var(--text-secondary); font-size:12px;">タグで絞り込み:</span>
-        <div id="cmp-tag-filter" style="display:flex; gap:6px; flex-wrap:wrap;"></div>
+      <div class="comparison-mode-switch" role="group" aria-label="比較対象の選び方">
+        <button class="btn active" type="button" data-cmp-mode="datasets">個別データセット</button>
+        <button class="btn" type="button" data-cmp-mode="cohorts">タググループ A / B</button>
       </div>
-      <div class="col-picker" id="cmp-datasets" style="max-height:180px;"></div>
+
+      <div id="cmp-dataset-selector">
+        <h2>比較するデータセット</h2>
+        <div class="controls-row" style="margin-bottom:8px;">
+          <span style="color:var(--text-secondary); font-size:12px;">タグで絞り込み:</span>
+          <div id="cmp-tag-filter" style="display:flex; gap:6px; flex-wrap:wrap;"></div>
+        </div>
+        <div class="col-picker" id="cmp-datasets" style="max-height:180px;"></div>
+      </div>
+
+      <div id="cmp-cohort-selector" hidden>
+        <h2>タグで比較グループを作る</h2>
+        <p class="hint">同じ条件のデータセットをA/Bへまとめます。タグをクリックすると対象件数と共通信号を自動更新します。</p>
+        <div class="cohort-builder-grid">
+          <div class="cohort-builder" data-cohort-index="0">
+            <div class="cohort-heading"><span class="cohort-badge cohort-a">A</span><strong>グループA</strong></div>
+            <label class="field">タグの組み合わせ
+              <select class="cohort-match"><option value="all">すべて含む (AND)</option><option value="any">いずれか含む (OR)</option></select>
+            </label>
+            <div class="cohort-tags"></div>
+          </div>
+          <div class="cohort-builder" data-cohort-index="1">
+            <div class="cohort-heading"><span class="cohort-badge cohort-b">B</span><strong>グループB</strong></div>
+            <label class="field">タグの組み合わせ
+              <select class="cohort-match"><option value="all">すべて含む (AND)</option><option value="any">いずれか含む (OR)</option></select>
+            </label>
+            <div class="cohort-tags"></div>
+          </div>
+        </div>
+        <div id="cmp-cohort-status" class="cohort-status">A/Bそれぞれにタグを1つ以上選択してください。</div>
+      </div>
 
       <div class="controls-row" style="margin-top:14px;">
         <label class="field">比較する信号
           <select id="cmp-signal" style="min-width:200px;"></select>
         </label>
-        <label class="field">グループ列 (ギア段・モードなど)
+        <label class="field cmp-dataset-only">グループ列 (ギア段・モードなど)
           <select id="cmp-groupby" style="min-width:180px;"><option value="">なし (全体のみ)</option></select>
         </label>
-        <label class="field">基準 (自社) データセット
+        <label class="field cmp-dataset-only">基準 (自社) データセット
           <select id="cmp-baseline" style="min-width:180px;"></select>
         </label>
         <button class="btn" id="cmp-plot" title="手動で再比較">🔄 更新</button>
@@ -261,7 +290,52 @@
       <button class="btn subtle" id="cmp-add-filter">＋ 条件を追加</button>
     </div>
 
-    <div class="card">
+    <div id="cmp-cohort-results" hidden>
+      <div class="card">
+        <div class="cohort-result-header">
+          <div>
+            <h2>タググループ比較</h2>
+            <p class="hint">走行量の違いを除く場合は「データセット均等」を使います。</p>
+          </div>
+          <label class="field">正規化
+            <select id="cmp-cohort-normalization">
+              <option value="mean_dataset_percents">データセット均等</option>
+              <option value="pooled_percents">全行プール</option>
+            </select>
+          </label>
+        </div>
+        <div id="cmp-cohort-summary" class="cohort-summary"></div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <h2>信号分布</h2>
+          <div class="chart" id="cmp-cohort-hist-chart"></div>
+        </div>
+        <div class="card">
+          <h2>X-Y 動作領域</h2>
+          <div class="controls-row compact">
+            <label class="field">X<select id="cmp-cohort-x"></select></label>
+            <label class="field">Y<select id="cmp-cohort-y"></select></label>
+          </div>
+          <div class="chart tall" id="cmp-cohort-2d-chart"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>状態遷移・変速頻度</h2>
+        <div class="controls-row">
+          <label class="field">状態列<select id="cmp-transition-state"></select></label>
+          <label class="field">並び順<select id="cmp-transition-order"></select></label>
+          <label class="field">正規化基準<select id="cmp-transition-denominator"><option value="">1,000行あたり</option></select></label>
+          <label class="field">基準量<input id="cmp-transition-scale" type="number" value="1" min="0.000001" step="any"></label>
+        </div>
+        <p class="hint">例: 秒単位の時間列＋3600で1時間あたり、km単位の距離列＋100で100kmあたり。</p>
+        <div class="chart" id="cmp-transition-chart"></div>
+      </div>
+    </div>
+
+    <div class="card cmp-dataset-only">
       <h2>彼我差分サマリ (共通信号の自動スキャン)</h2>
       <p style="margin:0 0 10px; color:var(--text-secondary); font-size:12px;">
         共通するすべての数値信号について、基準データセットとの分布のずれ (KS統計量: 0=一致、1=完全分離) と平均の差を計算し、差が大きい順に並べます。行をクリックすると下のチャートがその信号に切り替わります。</p>
@@ -271,7 +345,7 @@
       <div class="empty-note" id="cmp-diff-empty">「比較する」を押すとここに差分ランキングが表示されます。</div>
     </div>
 
-    <div class="grid-2">
+    <div class="grid-2 cmp-dataset-only">
       <div class="card">
         <h2>全体分布の比較 (割合 %)</h2>
         <p style="margin:0 0 10px; color:var(--text-secondary); font-size:12px;">データ量の差を吸収するため、各データセット内での割合で比較します。</p>
@@ -284,13 +358,13 @@
       </div>
     </div>
 
-    <div class="card" id="cmp-group-card" style="display:none;">
+    <div class="card cmp-dataset-only" id="cmp-group-card" style="display:none;">
       <h2 id="cmp-group-title">グループ別比較 (箱ひげ図)</h2>
       <p style="margin:0 0 10px; color:var(--text-secondary); font-size:12px;">箱 = 四分位範囲 (Q1〜Q3)、中央線 = 中央値、破線 = 平均、ひげ = 1.5×IQR 範囲。</p>
       <div class="chart tall" id="cmp-group-chart"></div>
     </div>
 
-    <div class="card">
+    <div class="card cmp-dataset-only">
       <h2>特性カーブ比較</h2>
       <p style="margin:0 0 10px; color:var(--text-secondary); font-size:12px;">
         時間軸に依存しない物理特性の比較。X をビン分割し、実線 = 各ビンの Y 平均、帯 = P10〜P90。例: 車速 × エンジン回転数、スロットル × 加速度。</p>
@@ -306,7 +380,7 @@
       <div class="chart" id="cmp-curve-chart"></div>
     </div>
 
-    <div class="card">
+    <div class="card cmp-dataset-only">
       <h2>統計量比較 (選択信号)</h2>
       <div class="table-wrap">
         <table class="data" id="cmp-stats-table"><thead></thead><tbody></tbody></table>

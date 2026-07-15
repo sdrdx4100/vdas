@@ -4,7 +4,21 @@ export const state = {
   datasets: [],
   ts: { schema: null, filters: [] },   // 時系列タブ
   st: { schema: null, filters: [] },   // 統計タブ
-  cmp: { tagFilter: new Set(), schemas: {}, schema: null, filters: [], last: null },  // 比較タブ
+  cmp: {
+    mode: "datasets",
+    tagFilter: new Set(),
+    schemas: {},
+    schema: null,
+    filters: [],
+    last: null,
+    cohortSpecs: [
+      { name: "A", tags: new Set(), match: "all" },
+      { name: "B", tags: new Set(), match: "all" },
+    ],
+    cohortResolution: null,
+    cohortResolveToken: 0,
+    cohortRunToken: 0,
+  },  // 比較タブ
   cl: { schema: null, result: null },          // クラスタリングタブ
   labelsets: [],
   tags: [],

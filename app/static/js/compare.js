@@ -2,7 +2,7 @@
 import { $, $$, api, toast, debounce, esc } from "./api.js";
 import { state } from "./state.js";
 import { loadSchema, renderFilters, activeFilters } from "./filters.js";
-import { seriesColors, baseLayout, PLOT_CONFIG, renderChart, chartRegistry } from "./charts.js";
+import { cssVar, seriesColors, baseLayout, PLOT_CONFIG, renderChart, chartRegistry } from "./charts.js";
 import { openNameDialog } from "./modals.js";
 import { tagChips } from "./datasets.js";
 
@@ -23,6 +23,92 @@ export function renderCmpTagFilter() {
       renderCmpDatasets();
     });
     wrap.appendChild(chip);
+  }
+}
+
+function cohortPayload() {
+  return state.cmp.cohortSpecs.map((spec) => ({
+    name: spec.name,
+    tags: [...spec.tags],
+    match: spec.match,
+  }));
+}
+
+function cohortsReady() {
+  return state.cmp.cohortSpecs.every((spec) => spec.tags.size > 0);
+}
+
+export function renderCmpCohorts() {
+  $$(".cohort-builder").forEach((builder) => {
+    const index = Number(builder.dataset.cohortIndex);
+    const spec = state.cmp.cohortSpecs[index];
+    const match = builder.querySelector(".cohort-match");
+    const tags = builder.querySelector(".cohort-tags");
+    match.value = spec.match;
+    match.onchange = () => {
+      spec.match = match.value;
+      resolveCmpCohorts(true);
+    };
+    tags.innerHTML = "";
+    if (!state.tags.length) {
+      tags.innerHTML = '<span class="hint">タグがありません。データ管理でタグを登録してください。</span>';
+      return;
+    }
+    for (const tag of state.tags) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "chip clickable" + (spec.tags.has(tag) ? " on" : "");
+      chip.textContent = tag;
+      chip.addEventListener("click", () => {
+        spec.tags.has(tag) ? spec.tags.delete(tag) : spec.tags.add(tag);
+        state.cmp.cohortResolution = null;
+        renderCmpCohorts();
+        resolveCmpCohorts(true);
+      });
+      tags.appendChild(chip);
+    }
+  });
+}
+
+export async function resolveCmpCohorts(autoRun = false) {
+  const resolveToken = ++state.cmp.cohortResolveToken;
+  const status = $("#cmp-cohort-status");
+  if (!cohortsReady()) {
+    state.cmp.cohortResolution = null;
+    state.cmp.schema = null;
+    status.className = "cohort-status";
+    status.textContent = "A/Bそれぞれにタグを1つ以上選択してください。";
+    await updateCmpColumns([]);
+    return null;
+  }
+  status.className = "cohort-status";
+  status.textContent = "対象データセットを確認中…";
+  try {
+    const resolution = await api("/api/compare/cohorts/resolve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cohorts: cohortPayload() }),
+    });
+    if (resolveToken !== state.cmp.cohortResolveToken) return null;
+    state.cmp.cohortResolution = resolution;
+    const summary = resolution.cohorts
+      .map((cohort) => `${cohort.name}: ${cohort.dataset_count}件 / ${cohort.row_count.toLocaleString("ja-JP")}行`)
+      .join("　");
+    const overlap = resolution.overlaps.length
+      ? `　⚠ ${resolution.overlaps.length}件がA/B両方に含まれます`
+      : "";
+    status.className = "cohort-status" + (overlap ? " warning" : "");
+    status.textContent = summary + overlap;
+    await updateCmpColumns();
+    if (autoRun) cmpAutoRun();
+    return resolution;
+  } catch (error) {
+    if (resolveToken !== state.cmp.cohortResolveToken) return null;
+    state.cmp.cohortResolution = null;
+    status.className = "cohort-status warning";
+    status.textContent = error.message;
+    await updateCmpColumns([]);
+    return null;
   }
 }
 
@@ -57,13 +143,28 @@ export function cmpSelectedIds() {
   return $$("#cmp-datasets input:checked").map((el) => el.value);
 }
 
-export async function updateCmpColumns() {
-  const ids = cmpSelectedIds();
+function cmpCohortIds() {
+  const cohorts = state.cmp.cohortResolution?.cohorts || [];
+  return [...new Set(cohorts.flatMap((cohort) => cohort.dataset_ids))];
+}
+
+function cmpActiveIds() {
+  return state.cmp.mode === "cohorts" ? cmpCohortIds() : cmpSelectedIds();
+}
+
+export async function updateCmpColumns(idsOverride = null) {
+  const ids = idsOverride || cmpActiveIds();
   const sigSel = $("#cmp-signal"), grpSel = $("#cmp-groupby");
   const baseSel = $("#cmp-baseline"), cxSel = $("#cmp-curve-x"), cySel = $("#cmp-curve-y");
+  const cohortX = $("#cmp-cohort-x"), cohortY = $("#cmp-cohort-y");
+  const transitionState = $("#cmp-transition-state"), transitionOrder = $("#cmp-transition-order");
+  const transitionDenominator = $("#cmp-transition-denominator");
   if (!ids.length) {
     sigSel.innerHTML = ""; grpSel.innerHTML = '<option value="">なし (全体のみ)</option>';
     baseSel.innerHTML = ""; cxSel.innerHTML = ""; cySel.innerHTML = "";
+    cohortX.innerHTML = ""; cohortY.innerHTML = "";
+    transitionState.innerHTML = ""; transitionOrder.innerHTML = "";
+    transitionDenominator.innerHTML = '<option value="">1,000行あたり</option>';
     state.cmp.schema = null;
     return;
   }
@@ -74,6 +175,9 @@ export async function updateCmpColumns() {
   // 現在の選択値は await 後に読む (読み込み中にユーザーが変更した値を潰さないため)
   const prevSig = sigSel.value, prevGrp = grpSel.value, prevBase = baseSel.value;
   const prevCx = cxSel.value, prevCy = cySel.value;
+  const prevCohortX = cohortX.value, prevCohortY = cohortY.value;
+  const prevTransitionState = transitionState.value, prevTransitionOrder = transitionOrder.value;
+  const prevTransitionDenominator = transitionDenominator.value;
   // 選択された全データセットに共通する列 (名前で照合)
   const schemas = ids.map((id) => state.cmp.schemas[id]);
   const common = schemas[0].columns.filter((c) =>
@@ -87,6 +191,8 @@ export async function updateCmpColumns() {
   sigSel.innerHTML = numOpts;
   cxSel.innerHTML = numOpts;
   cySel.innerHTML = numOpts;
+  cohortX.innerHTML = numOpts;
+  cohortY.innerHTML = numOpts;
   grpSel.innerHTML = '<option value="">なし (全体のみ)</option>' +
     common.filter((c) => c.kind !== "temporal")
       .map((c) => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join("");
@@ -112,10 +218,38 @@ export async function updateCmpColumns() {
     const gy = numeric.find((c) => /rpm|回転/i.test(c.name)) || numeric[1] || numeric[0];
     if (gy) cySel.value = gy.name;
   }
+
+  if (!keep(cohortX, prevCohortX)) {
+    const guess = numeric.find((c) => /speed|km\/?h|velocity|車速/i.test(c.name)) || numeric[0];
+    if (guess) cohortX.value = guess.name;
+  }
+  if (!keep(cohortY, prevCohortY)) {
+    const guess = numeric.find((c) => /rpm|回転/i.test(c.name)) || numeric[1] || numeric[0];
+    if (guess) cohortY.value = guess.name;
+  }
+
+  transitionState.innerHTML = common
+    .filter((c) => c.kind !== "temporal")
+    .map((c) => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join("");
+  transitionOrder.innerHTML = common
+    .filter((c) => c.kind === "numeric" || c.kind === "temporal")
+    .map((c) => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join("");
+  transitionDenominator.innerHTML = '<option value="">1,000行あたり</option>' +
+    numeric.map((c) => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join("");
+  if (!keep(transitionState, prevTransitionState)) {
+    const guess = common.find((c) => /gear|ギア|shift|段|state|状態/i.test(c.name));
+    if (guess) transitionState.value = guess.name;
+  }
+  if (!keep(transitionOrder, prevTransitionOrder)) {
+    const guess = common.find((c) => /time|timestamp|時刻|時間/i.test(c.name)) ||
+      common.find((c) => c.kind === "temporal") || numeric[0];
+    if (guess) transitionOrder.value = guess.name;
+  }
+  keep(transitionDenominator, prevTransitionDenominator);
 }
 
 $("#cmp-add-filter").addEventListener("click", () => {
-  if (!state.cmp.schema) return toast("先にデータセットを2つ以上選択してください", "error");
+  if (!state.cmp.schema) return toast("先に比較対象を選択してください", "error");
   state.cmp.filters.push({ column: state.cmp.schema.columns[0]?.name, op: "eq", value: "" });
   renderFilters("#cmp-filters", state.cmp);
 });
@@ -123,14 +257,39 @@ $("#cmp-add-filter").addEventListener("click", () => {
 const cmpAutoRun = debounce(() => runCompare(true), 600);
 state.cmp.onChange = cmpAutoRun;
 
+export async function setCmpMode(mode, autoRun = false) {
+  state.cmp.mode = mode === "cohorts" ? "cohorts" : "datasets";
+  $$("[data-cmp-mode]").forEach((button) =>
+    button.classList.toggle("active", button.dataset.cmpMode === state.cmp.mode));
+  $("#cmp-dataset-selector").hidden = state.cmp.mode !== "datasets";
+  $("#cmp-cohort-selector").hidden = state.cmp.mode !== "cohorts";
+  $("#cmp-cohort-results").hidden = state.cmp.mode !== "cohorts";
+  $$(".cmp-dataset-only").forEach((element) => { element.hidden = state.cmp.mode !== "datasets"; });
+  if (state.cmp.mode === "cohorts") {
+    renderCmpCohorts();
+    await resolveCmpCohorts(autoRun);
+  } else {
+    await updateCmpColumns();
+    if (autoRun) cmpAutoRun();
+  }
+}
+
+$$("[data-cmp-mode]").forEach((button) => button.addEventListener("click", () =>
+  setCmpMode(button.dataset.cmpMode, true)));
+
 $("#cmp-plot").addEventListener("click", () => runCompare());
 ["#cmp-signal", "#cmp-groupby", "#cmp-baseline"].forEach((sel) =>
   $(sel).addEventListener("change", cmpAutoRun));
 $("#cmp-curve-x").addEventListener("change", () => plotCmpCurve().catch(() => {}));
 $("#cmp-curve-y").addEventListener("change", () => plotCmpCurve().catch(() => {}));
+["#cmp-cohort-normalization", "#cmp-cohort-x", "#cmp-cohort-y",
+  "#cmp-transition-state", "#cmp-transition-order", "#cmp-transition-denominator",
+  "#cmp-transition-scale"].forEach((selector) =>
+  $(selector).addEventListener("change", cmpAutoRun));
 
 // 比較タブを開いたとき、未選択ならデータセットを自動で選んで比較を始める
 export function autoSelectCmpDatasets() {
+  if (state.cmp.mode === "cohorts") return;
   if (cmpSelectedIds().length >= 2) return;
   const boxes = $$("#cmp-datasets input");
   if (boxes.length < 2) return;
@@ -149,6 +308,7 @@ function fmtStat(v) {
 }
 
 export async function runCompare(auto = false) {
+  if (state.cmp.mode === "cohorts") return runCohortCompare(auto);
   const ids = cmpSelectedIds();
   const signal = $("#cmp-signal").value;
   if (ids.length < 2) return auto || toast("データセットを2つ以上選択してください", "error");
@@ -174,6 +334,183 @@ export async function runCompare(auto = false) {
   } catch (e) {
     toast(`エラー: ${e.message}`, "error");
   }
+}
+
+function cohortPost(path, body) {
+  return api(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cohorts: cohortPayload(), ...body }),
+  });
+}
+
+async function runCohortCompare(auto = false) {
+  let resolution = state.cmp.cohortResolution;
+  if (!resolution) resolution = await resolveCmpCohorts(false);
+  if (!resolution) return auto || toast("A/Bのタグ条件を指定してください", "error");
+  const signal = $("#cmp-signal").value;
+  const x = $("#cmp-cohort-x").value;
+  const y = $("#cmp-cohort-y").value;
+  if (!signal) return auto || toast("比較する信号を選択してください", "error");
+  if (!x || !y || x === y) return auto || toast("XとYには別の数値信号を選択してください", "error");
+  const filters = activeFilters(state.cmp);
+  const normalization = $("#cmp-cohort-normalization").value;
+  const runToken = ++state.cmp.cohortRunToken;
+  const ctx = { mode: "cohorts", cohorts: cohortPayload(), signal, x, y, filters, normalization };
+  state.cmp.last = ctx;
+  try {
+    const [histogram, histogram2d] = await Promise.all([
+      cohortPost("/api/compare/cohorts/histogram", { column: signal, bins: 40, filters }),
+      cohortPost("/api/compare/cohorts/histogram2d", { x, y, bins_x: 32, bins_y: 32, filters }),
+    ]);
+    if (runToken !== state.cmp.cohortRunToken) return;
+    renderCohortSummary(resolution, histogram);
+    renderCohortHistogram(histogram, normalization);
+    renderCohortHistogram2d(histogram2d, normalization);
+    await renderCohortTransitions(filters, normalization, runToken);
+    if (runToken !== state.cmp.cohortRunToken) return;
+    requestAnimationFrame(() => {
+      ["cmp-cohort-hist-chart", "cmp-cohort-2d-chart", "cmp-transition-chart"].forEach((id) => {
+        const element = document.getElementById(id);
+        if (element?.data) Plotly.Plots.resize(element);
+      });
+    });
+  } catch (error) {
+    if (runToken !== state.cmp.cohortRunToken) return;
+    toast(`比較エラー: ${error.message}`, "error");
+  }
+}
+
+function renderCohortSummary(resolution, histogram) {
+  const points = new Map(histogram.cohorts.map((cohort) => [cohort.name, cohort.total_points]));
+  $("#cmp-cohort-summary").innerHTML = resolution.cohorts.map((cohort, index) => `
+    <div class="cohort-summary-card">
+      <strong><span class="cohort-badge ${index ? "cohort-b" : "cohort-a"}">${esc(cohort.name)}</span>
+        ${esc(cohort.name)}グループ</strong>
+      <span>${cohort.dataset_count.toLocaleString("ja-JP")}データセット / ${cohort.row_count.toLocaleString("ja-JP")}行 /
+        有効点 ${Number(points.get(cohort.name) || 0).toLocaleString("ja-JP")}</span>
+    </div>`).join("") + (resolution.overlaps.length ? `
+      <div class="cohort-summary-card"><strong>⚠ 重複</strong>
+      <span>${resolution.overlaps.length}データセットが複数グループに所属しています。</span></div>` : "");
+}
+
+function renderCohortHistogram(histogram, normalization) {
+  const colors = seriesColors();
+  let x;
+  if (histogram.kind === "numeric") {
+    x = histogram.edges.slice(0, -1).map((edge, index) => (edge + histogram.edges[index + 1]) / 2);
+  } else {
+    x = histogram.labels;
+  }
+  const traces = histogram.cohorts.map((cohort, index) => ({
+    type: "bar",
+    x,
+    y: cohort[normalization],
+    name: cohort.name,
+    opacity: histogram.kind === "numeric" ? 0.62 : 0.9,
+    marker: { color: colors[index % colors.length] },
+    hovertemplate: "%{x}<br>%{y:.3f}%<extra>%{fullData.name}</extra>",
+  }));
+  renderChart("cmp-cohort-hist-chart", () => Plotly.react(
+    "cmp-cohort-hist-chart",
+    traces,
+    baseLayout({
+      barmode: histogram.kind === "numeric" ? "overlay" : "group",
+      xaxis: Object.assign(baseLayout().xaxis, { title: { text: histogram.column } }),
+      yaxis: Object.assign(baseLayout().yaxis, { title: { text: "割合 (%)" } }),
+      showlegend: true,
+    }),
+    PLOT_CONFIG,
+  ));
+}
+
+function matrixDifference(left, right) {
+  return left.map((row, rowIndex) => row.map((value, columnIndex) =>
+    right[rowIndex][columnIndex] - value));
+}
+
+function renderCohortHistogram2d(result, normalization) {
+  if (result.cohorts.length < 2) return;
+  const x = result.x_edges.slice(0, -1).map((edge, index) => (edge + result.x_edges[index + 1]) / 2);
+  const y = result.y_edges.slice(0, -1).map((edge, index) => (edge + result.y_edges[index + 1]) / 2);
+  const first = result.cohorts[0], second = result.cohorts[1];
+  const firstZ = first[normalization], secondZ = second[normalization];
+  const difference = matrixDifference(firstZ, secondZ);
+  const maxDensity = Math.max(...firstZ.flat(), ...secondZ.flat(), 0.000001);
+  const maxDifference = Math.max(...difference.flat().map(Math.abs), 0.000001);
+  const traces = [
+    { type: "heatmap", x, y, z: firstZ, name: first.name, xaxis: "x", yaxis: "y",
+      colorscale: "Viridis", zmin: 0, zmax: maxDensity, showscale: false,
+      hovertemplate: `${esc(first.name)}<br>${esc(result.x)}=%{x}<br>${esc(result.y)}=%{y}<br>%{z:.3f}%<extra></extra>` },
+    { type: "heatmap", x, y, z: secondZ, name: second.name, xaxis: "x2", yaxis: "y2",
+      colorscale: "Viridis", zmin: 0, zmax: maxDensity, showscale: false,
+      hovertemplate: `${esc(second.name)}<br>${esc(result.x)}=%{x}<br>${esc(result.y)}=%{y}<br>%{z:.3f}%<extra></extra>` },
+    { type: "heatmap", x, y, z: difference, name: `${second.name}-${first.name}`, xaxis: "x3", yaxis: "y3",
+      colorscale: "RdBu", reversescale: true, zmin: -maxDifference, zmax: maxDifference, zmid: 0,
+      colorbar: { title: { text: "差(pt)" }, thickness: 10 },
+      hovertemplate: `${esc(second.name)}-${esc(first.name)}<br>${esc(result.x)}=%{x}<br>${esc(result.y)}=%{y}<br>差=%{z:.3f}pt<extra></extra>` },
+  ];
+  const axis = (domain, title, anchor) => ({
+    domain, anchor, title: { text: title }, gridcolor: cssVar("--chart-grid"),
+    zerolinecolor: cssVar("--chart-axis"), linecolor: cssVar("--chart-axis"),
+  });
+  renderChart("cmp-cohort-2d-chart", () => Plotly.react(
+    "cmp-cohort-2d-chart",
+    traces,
+    baseLayout({
+      margin: { l: 55, r: 65, t: 48, b: 50 },
+      xaxis: axis([0, 0.29], result.x, "y"), yaxis: axis([0, 1], result.y, "x"),
+      xaxis2: axis([0.355, 0.645], result.x, "y2"), yaxis2: axis([0, 1], result.y, "x2"),
+      xaxis3: axis([0.71, 1], result.x, "y3"), yaxis3: axis([0, 1], result.y, "x3"),
+      annotations: [
+        { text: first.name, x: 0.145, y: 1.1, xref: "paper", yref: "paper", showarrow: false },
+        { text: second.name, x: 0.5, y: 1.1, xref: "paper", yref: "paper", showarrow: false },
+        { text: `${second.name} − ${first.name}`, x: 0.855, y: 1.1, xref: "paper", yref: "paper", showarrow: false },
+      ],
+      showlegend: false,
+    }),
+    PLOT_CONFIG,
+  ));
+}
+
+async function renderCohortTransitions(filters, normalization, runToken) {
+  const stateColumn = $("#cmp-transition-state").value;
+  const orderBy = $("#cmp-transition-order").value;
+  if (!stateColumn || !orderBy || stateColumn === orderBy) {
+    Plotly.purge("cmp-transition-chart");
+    return;
+  }
+  const denominatorColumn = $("#cmp-transition-denominator").value || null;
+  const denominatorScale = Number($("#cmp-transition-scale").value) || 1;
+  const result = await cohortPost("/api/compare/cohorts/transitions", {
+    state_column: stateColumn,
+    order_by: orderBy,
+    filters,
+    denominator_column: denominatorColumn,
+    denominator_scale: denominatorScale,
+  });
+  if (runToken !== state.cmp.cohortRunToken) return;
+  const rateKey = normalization === "mean_dataset_percents" ? "mean_dataset_rates" : "pooled_rates";
+  const traces = result.cohorts.map((cohort, index) => ({
+    type: "bar", x: result.transitions, y: cohort[rateKey], name: cohort.name,
+    marker: { color: seriesColors()[index % seriesColors().length] },
+    customdata: cohort.counts,
+    hovertemplate: "%{x}<br>頻度=%{y:.3f}<br>回数=%{customdata}<extra>%{fullData.name}</extra>",
+  }));
+  const unit = result.rate.kind === "rows"
+    ? "1,000行あたり"
+    : `${result.rate.denominator_column} ${result.rate.scale}あたり`;
+  renderChart("cmp-transition-chart", () => Plotly.react(
+    "cmp-transition-chart",
+    traces,
+    baseLayout({
+      barmode: "group",
+      xaxis: Object.assign(baseLayout().xaxis, { title: { text: `${stateColumn} 遷移` } }),
+      yaxis: Object.assign(baseLayout().yaxis, { title: { text: `頻度 (${unit})` } }),
+      showlegend: true,
+    }),
+    PLOT_CONFIG,
+  ));
 }
 
 // --- 彼我差分サマリ: 共通信号を KS 統計量でランキング ---
@@ -370,15 +707,32 @@ async function plotCmpCurve() {
 
 $("#cmp-save-view").addEventListener("click", async () => {
   const ids = cmpSelectedIds();
-  if (ids.length < 2) return toast("データセットを2つ以上選択してください", "error");
+  if (state.cmp.mode === "datasets" && ids.length < 2) {
+    return toast("データセットを2つ以上選択してください", "error");
+  }
+  if (state.cmp.mode === "cohorts" && !state.cmp.cohortResolution) {
+    return toast("A/Bのタグ条件を指定してください", "error");
+  }
   const name = await openNameDialog("比較ビューを保存");
   if (!name) return;
+  const cohortConfig = state.cmp.mode === "cohorts" ? {
+    mode: "cohorts",
+    cohorts: cohortPayload(),
+    normalization: $("#cmp-cohort-normalization").value,
+    cohort_x: $("#cmp-cohort-x").value || null,
+    cohort_y: $("#cmp-cohort-y").value || null,
+    transition_state: $("#cmp-transition-state").value || null,
+    transition_order: $("#cmp-transition-order").value || null,
+    transition_denominator: $("#cmp-transition-denominator").value || null,
+    transition_scale: Number($("#cmp-transition-scale").value) || 1,
+  } : { mode: "datasets" };
   await api("/api/views", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       name, kind: "compare", dataset_id: null,
       config: {
+        ...cohortConfig,
         dataset_ids: ids,
         signal: $("#cmp-signal").value,
         group_by: $("#cmp-groupby").value || null,

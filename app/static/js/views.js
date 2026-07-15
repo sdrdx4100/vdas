@@ -3,7 +3,10 @@ import { $, $$, api, toast, esc } from "./api.js";
 import { state } from "./state.js";
 import { renderFilters } from "./filters.js";
 import { gotoPage } from "./nav.js";
-import { renderCmpTagFilter, renderCmpDatasets, updateCmpColumns, runCompare } from "./compare.js";
+import {
+  renderCmpTagFilter, renderCmpDatasets, renderCmpCohorts,
+  setCmpMode, updateCmpColumns, runCompare,
+} from "./compare.js";
 import { setTsSelectedColumns, plotTimeseries } from "./timeseries.js";
 import { loadSummary } from "./stats.js";
 
@@ -35,10 +38,13 @@ export async function refreshViewsPage() {
   $("#views-empty").style.display = views.length ? "none" : "";
   const kindLabel = { timeseries: "時系列", stats: "統計", compare: "比較" };
   for (const v of views) {
+    const isCohortView = v.kind === "compare" && v.config.mode === "cohorts";
     const dsIds = v.kind === "compare" ? (v.config.dataset_ids || []) : [v.dataset_id];
-    const dsNames = dsIds
-      .map((id) => state.datasets.find((d) => d.id === id)?.name || id)
-      .filter(Boolean).join(" / ") || "—";
+    const dsNames = isCohortView
+      ? (v.config.cohorts || []).map((cohort) =>
+          `${cohort.name}: ${(cohort.tags || []).join(cohort.match === "any" ? " OR " : " AND ")}`).join(" / ")
+      : dsIds.map((id) => state.datasets.find((d) => d.id === id)?.name || id)
+          .filter(Boolean).join(" / ") || "—";
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td><strong>${esc(v.name)}</strong></td>
@@ -84,6 +90,38 @@ async function loadView(v) {
   const c = v.config || {};
   if (v.kind === "compare") {
     gotoPage("compare");
+    if (c.mode === "cohorts") {
+      state.cmp.cohortSpecs = (c.cohorts || []).slice(0, 2).map((cohort, index) => ({
+        name: cohort.name || (index ? "B" : "A"),
+        tags: new Set(cohort.tags || []),
+        match: cohort.match === "any" ? "any" : "all",
+      }));
+      while (state.cmp.cohortSpecs.length < 2) {
+        const index = state.cmp.cohortSpecs.length;
+        state.cmp.cohortSpecs.push({ name: index ? "B" : "A", tags: new Set(), match: "all" });
+      }
+      renderCmpCohorts();
+      await setCmpMode("cohorts");
+      state.cmp.filters = (c.filters || []).map((filter) => ({ ...filter }));
+      renderFilters("#cmp-filters", state.cmp);
+      const setValue = (selector, value) => {
+        if (value && [...$(selector).options].some((option) => option.value === value)) {
+          $(selector).value = value;
+        }
+      };
+      setValue("#cmp-signal", c.signal);
+      setValue("#cmp-cohort-x", c.cohort_x);
+      setValue("#cmp-cohort-y", c.cohort_y);
+      setValue("#cmp-transition-state", c.transition_state);
+      setValue("#cmp-transition-order", c.transition_order);
+      setValue("#cmp-transition-denominator", c.transition_denominator);
+      if (c.normalization) $("#cmp-cohort-normalization").value = c.normalization;
+      if (c.transition_scale) $("#cmp-transition-scale").value = c.transition_scale;
+      runCompare();
+      toast(`ビュー「${v.name}」を読み込みました`);
+      return;
+    }
+    await setCmpMode("datasets");
     state.cmp.tagFilter.clear();
     renderCmpTagFilter();
     renderCmpDatasets();

@@ -1,6 +1,10 @@
 .venv/
 __pycache__/
 *.pyc
+.coverage
+.pytest_cache/
+.ruff_cache/
+htmlcov/
 data/
 sample_drive.csv
 sample_drive.parquet

@@ -78,3 +78,20 @@ data/
 - `POST /api/datasets/{id}/cluster` — K-means クラスタリング (結果列の書き戻し)
 - `GET/POST/DELETE /api/views` — 保存ビュー (時系列 / 統計 / 比較)
 - `GET/POST/DELETE /api/labelsets` — ラベルセット
+
+## 開発・テスト
+
+開発用依存関係をインストールします。
+
+```bash
+pip install -r requirements-dev.txt
+```
+
+テストと静的チェックは次のコマンドで実行できます。テスト用DBは一時ディレクトリに作成され、通常の `data/` は変更しません。
+
+```bash
+pytest --cov=app --cov-report=term-missing
+ruff check app scripts tests run.py
+```
+
+GitHub Actionsでは Python 3.12 / 3.13 の両方で静的チェックとテストを実行し、バックエンドのカバレッジ75%以上を必須としています。

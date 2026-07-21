@@ -767,6 +767,287 @@ def chart(dataset_id: str, kind: str, x: str | None = None, y: str | None = None
     return result
 
 
+# ---------- タググループ横断の汎用チャート (グラフ作成タブのグループモード) ----------
+
+MAX_CHART_GROUPS = 8
+
+
+def _group_chart_sources(groups: list[dict[str, Any]], needed: list[str]) -> list[tuple[str, str, dict[str, dict[str, Any]]]]:
+    """グループ定義 [{label, dataset_ids}] を (label, FROM句ソース, 列マップ) に展開する。
+
+    必要な列だけを UNION ALL でプールするため、列数の多い J1939 ログでも軽い。
+    """
+    if not groups:
+        raise QueryError("グループを1つ以上指定してください")
+    if len(groups) > MAX_CHART_GROUPS:
+        raise QueryError(f"グループは最大 {MAX_CHART_GROUPS} 個までです")
+    needed = [n for n in dict.fromkeys(needed) if n]
+    if not needed:
+        raise QueryError("列を選択してください")
+    out = []
+    for g in groups:
+        ids = g.get("dataset_ids") or []
+        label = str(g.get("label") or "?")
+        if not ids:
+            raise QueryError(f"グループ「{label}」にデータセットがありません")
+        schemas = [_schema_map(ds_id) for ds_id in ids]
+        cols_map: dict[str, dict[str, Any]] = {}
+        for n in needed:
+            for _, cols in schemas:
+                if n not in cols:
+                    raise QueryError(f"列「{n}」はグループ「{label}」の全データセットに存在しません")
+            cols_map[n] = schemas[0][1][n]
+        if len(ids) == 1:
+            src = _quote(schemas[0][0])
+        else:
+            cols_sql = ", ".join(_quote(c) for c in needed)
+            src = "(" + " UNION ALL ".join(
+                f"SELECT {cols_sql} FROM {_quote(t)}" for t, _ in schemas) + ")"
+        out.append((label, src, cols_map))
+    return out
+
+
+def _sorted_category_labels(totals: dict[str, int], limit: int = MAX_BAR_GROUPS) -> list[str]:
+    labels = [k for k, _ in sorted(totals.items(), key=lambda x: -x[1])[:limit]]
+    try:
+        labels.sort(key=lambda v: float(v))
+    except (TypeError, ValueError):
+        labels.sort()
+    return labels
+
+
+def chart_groups(groups: list[dict[str, Any]], kind: str, x: str | None = None,
+                 y: str | None = None, agg: str = "avg", bins: int = 40,
+                 filters: list[dict[str, Any]] | None = None,
+                 max_points: int | None = None) -> dict[str, Any]:
+    """グラフ作成タブのタググループモード。系列 = グループとして各種チャートを集計する。"""
+    if kind not in CHART_KINDS:
+        raise QueryError(f"未対応のチャート種別です: {kind}")
+    bins = max(5, min(int(bins), 200))
+    filter_cols = [f.get("column") for f in (filters or [])]
+
+    def need_numeric(cols_map: dict[str, dict[str, Any]], col: str, label: str) -> None:
+        if cols_map[col]["kind"] != "numeric":
+            raise QueryError(f"{label} には数値列を指定してください: {col}")
+
+    result: dict[str, Any]
+    if kind in ("scatter", "line"):
+        if not x or not y:
+            raise QueryError("X と Y の列を選択してください")
+        sources = _group_chart_sources(groups, [x, y] + filter_cols)
+        limit = max(200, _clamp_points(max_points) // len(sources))
+        series = []
+        with db.duck() as con:
+            for label, src, cols in sources:
+                need_numeric(cols, y, "Y")
+                where, params = _build_where(filters, cols)
+                total = con.execute(f"SELECT count(*) FROM {src}{where}", params).fetchone()[0]
+                stride = max(1, math.ceil(total / limit))
+                order = f"ORDER BY {_quote(x)}" if kind == "line" else "ORDER BY 1"
+                rows = con.execute(
+                    f"SELECT {_quote(x)}, {_quote(y)} FROM ("
+                    f"  SELECT {_quote(x)}, {_quote(y)}, row_number() OVER ({order}) AS __rn"
+                    f"  FROM {src}{where}"
+                    f") WHERE (__rn - 1) % {stride} = 0 ORDER BY __rn", params).fetchall()
+                series.append({"label": label, "total_rows": total,
+                               "x": [_jsonable(r[0]) for r in rows],
+                               "y": [_jsonable(r[1]) for r in rows]})
+        result = {"kind": kind, "series": series}
+
+    elif kind == "bar":
+        if not x:
+            raise QueryError("X の列を選択してください")
+        if agg not in AGG_FUNCS:
+            raise QueryError(f"未対応の集計です: {agg}")
+        needs_y = agg not in ("count", "share")
+        if needs_y and not y:
+            raise QueryError("Y の列を選択してください")
+        sources = _group_chart_sources(groups, [x] + ([y] if needs_y else []) + filter_cols)
+        expr = "count(*)" if not needs_y else f"{AGG_FUNCS[agg]}({_quote(y)})"
+        per_group: dict[str, dict[str, Any]] = {}
+        totals: dict[str, int] = {}
+        with db.duck() as con:
+            for label, src, cols in sources:
+                if needs_y:
+                    need_numeric(cols, y, "Y")
+                where, params = _build_where(filters, cols)
+                rows = con.execute(
+                    f"SELECT CAST({_quote(x)} AS VARCHAR), {expr}, count(*) FROM {src}"
+                    f"{where or ' WHERE 1=1'} AND {_quote(x)} IS NOT NULL GROUP BY 1",
+                    params).fetchall()
+                per_group[label] = {g: (v, n) for g, v, n in rows}
+                for g, _v, n in rows:
+                    totals[g] = totals.get(g, 0) + n
+        categories = _sorted_category_labels(totals)
+        series = []
+        for label, _src, _cols in sources:
+            values = [per_group[label].get(c, (None, 0))[0] for c in categories]
+            if agg == "share":
+                total = sum(n for _v, n in per_group[label].values()) or 1
+                values = [round(v * 100 / total, 3) if v is not None else None for v in values]
+            series.append({"label": label, "values": [_jsonable(v) for v in values]})
+        result = {"kind": "bar", "categories": categories, "series": series, "agg": agg}
+
+    elif kind == "box":
+        if not x or not y:
+            raise QueryError("X (グループ列) と Y の列を選択してください")
+        sources = _group_chart_sources(groups, [x, y] + filter_cols)
+        per_group = {}
+        totals = {}
+        q = _quote(y)
+        with db.duck() as con:
+            for label, src, cols in sources:
+                need_numeric(cols, y, "Y")
+                where, params = _build_where(filters, cols)
+                rows = con.execute(
+                    f"SELECT CAST({_quote(x)} AS VARCHAR), count({q}), avg({q}), min({q}), max({q}), "
+                    f"quantile_cont({q}, 0.25), quantile_cont({q}, 0.5), quantile_cont({q}, 0.75) "
+                    f"FROM {src}{where or ' WHERE 1=1'} "
+                    f"AND {q} IS NOT NULL AND {_quote(x)} IS NOT NULL GROUP BY 1",
+                    params).fetchall()
+                if len(rows) > 200:
+                    raise QueryError(f"グループが多すぎます ({len(rows)})。X には離散的な列を指定してください")
+                stats = {}
+                for g, cnt, avg, mn, mx, q1, med, q3 in rows:
+                    iqr = (q3 - q1) if q1 is not None and q3 is not None else 0
+                    stats[g] = {
+                        "count": cnt, "avg": _jsonable(avg), "q1": _jsonable(q1),
+                        "median": _jsonable(med), "q3": _jsonable(q3),
+                        "lowerfence": _jsonable(max(mn, q1 - 1.5 * iqr)) if q1 is not None else None,
+                        "upperfence": _jsonable(min(mx, q3 + 1.5 * iqr)) if q3 is not None else None,
+                    }
+                    totals[g] = totals.get(g, 0) + cnt
+                per_group[label] = stats
+        categories = _sorted_category_labels(totals)
+        series = [{"label": label, "groups": [per_group[label].get(c) for c in categories]}
+                  for label, _s, _c in sources]
+        result = {"kind": "box", "categories": categories, "series": series}
+
+    elif kind == "histogram":
+        if not x:
+            raise QueryError("X の列を選択してください")
+        sources = _group_chart_sources(groups, [x] + filter_cols)
+        q = _quote(x)
+        if sources[0][2][x]["kind"] != "numeric":
+            per_group = {}
+            totals = {}
+            with db.duck() as con:
+                for label, src, cols in sources:
+                    where, params = _build_where(filters, cols)
+                    rows = con.execute(
+                        f"SELECT CAST({q} AS VARCHAR), count(*) FROM {src}{where} GROUP BY 1",
+                        params).fetchall()
+                    per_group[label] = dict(rows)
+                    for g, n in rows:
+                        totals[g] = totals.get(g, 0) + n
+            labels = _sorted_category_labels(totals)
+            series = []
+            for label, _s, _c in sources:
+                counts = [per_group[label].get(l, 0) for l in labels]
+                n = sum(per_group[label].values()) or 1
+                series.append({"label": label, "counts": counts,
+                               "percents": [round(c * 100 / n, 3) for c in counts]})
+            result = {"kind": "histogram", "sub": "categorical", "labels": labels, "series": series}
+        else:
+            with db.duck() as con:
+                mns, mxs = [], []
+                for _label, src, cols in sources:
+                    where, params = _build_where(filters, cols)
+                    mn, mx = con.execute(f"SELECT min({q}), max({q}) FROM {src}{where}", params).fetchone()
+                    if mn is not None:
+                        mns.append(float(mn))
+                        mxs.append(float(mx))
+                if not mns:
+                    return {"kind": "histogram", "sub": "numeric", "edges": [], "series": []}
+                mn, mx = min(mns), max(mxs)
+                if mn == mx:
+                    mx = mn + 1
+                width = (mx - mn) / bins
+                series = []
+                for label, src, cols in sources:
+                    where, params = _build_where(filters, cols)
+                    rows = con.execute(
+                        f"SELECT least(cast(floor(({q} - ?) / ?) as int), ?) AS b, count(*) "
+                        f"FROM {src}{where or ' WHERE 1=1'} AND {q} IS NOT NULL GROUP BY b",
+                        [mn, width, bins - 1] + params).fetchall()
+                    counts = [0] * bins
+                    for b, c in rows:
+                        if b is not None and 0 <= b < bins:
+                            counts[b] = c
+                    total = sum(counts) or 1
+                    series.append({"label": label, "counts": counts,
+                                   "percents": [round(c * 100 / total, 3) for c in counts]})
+            result = {"kind": "histogram", "sub": "numeric",
+                      "edges": [mn + width * i for i in range(bins + 1)], "series": series}
+
+    else:  # heatmap → グループごとの動作領域を等高線で重ねる
+        if not x or not y:
+            raise QueryError("X と Y の列を選択してください")
+        sources = _group_chart_sources(groups, [x, y] + filter_cols)
+        qx, qy = _quote(x), _quote(y)
+        with db.duck() as con:
+            ranges = []
+            for label, src, cols in sources:
+                need_numeric(cols, x, "X")
+                need_numeric(cols, y, "Y")
+                where, params = _build_where(filters, cols)
+                row = con.execute(
+                    f"SELECT min({qx}), max({qx}), min({qy}), max({qy}) FROM {src}{where}",
+                    params).fetchone()
+                if row[0] is not None and row[2] is not None:
+                    ranges.append(tuple(float(v) for v in row))
+            if not ranges:
+                return {"kind": "heatmap", "x_edges": [], "y_edges": [], "series": []}
+            mnx = min(r[0] for r in ranges)
+            mxx = max(r[1] for r in ranges)
+            mny = min(r[2] for r in ranges)
+            mxy = max(r[3] for r in ranges)
+            if mnx == mxx:
+                mxx = mnx + 1
+            if mny == mxy:
+                mxy = mny + 1
+            wx, wy = (mxx - mnx) / bins, (mxy - mny) / bins
+            series = []
+            for label, src, cols in sources:
+                where, params = _build_where(filters, cols)
+                rows = con.execute(
+                    f"SELECT least(cast(floor(({qx} - ?) / ?) as int), ?), "
+                    f"least(cast(floor(({qy} - ?) / ?) as int), ?), count(*) "
+                    f"FROM {src}{where or ' WHERE 1=1'} "
+                    f"AND {qx} IS NOT NULL AND {qy} IS NOT NULL GROUP BY 1, 2",
+                    [mnx, wx, bins - 1, mny, wy, bins - 1] + params).fetchall()
+                matrix = [[0] * bins for _ in range(bins)]
+                for bx, by, n in rows:
+                    if bx is not None and by is not None and 0 <= bx < bins and 0 <= by < bins:
+                        matrix[by][bx] = n
+                series.append({"label": label, "matrix": matrix})
+        result = {"kind": "heatmap",
+                  "x_edges": [mnx + wx * i for i in range(bins + 1)],
+                  "y_edges": [mny + wy * i for i in range(bins + 1)],
+                  "series": series}
+
+    # グループごとの基本統計 (Y が無ければ X) をチップ表示用に添える
+    stats_col = y or x
+    try:
+        stat_sources = _group_chart_sources(groups, [stats_col] + filter_cols)
+        if stat_sources[0][2][stats_col]["kind"] == "numeric":
+            q = _quote(stats_col)
+            stats = []
+            with db.duck() as con:
+                for label, src, cols in stat_sources:
+                    where, params = _build_where(filters, cols)
+                    row = con.execute(
+                        f"SELECT count({q}), avg({q}), stddev({q}), min({q}), max({q}), "
+                        f"quantile_cont({q}, 0.5) FROM {src}{where}", params).fetchone()
+                    keys = ["count", "avg", "std", "min", "max", "median"]
+                    stats.append({"label": label, "column": stats_col,
+                                  **{k: _jsonable(v) for k, v in zip(keys, row)}})
+            result["stats"] = stats
+    except QueryError:
+        pass
+    return result
+
+
 def _jsonable(v: Any) -> Any:
     if v is None or isinstance(v, (int, float, str, bool)):
         if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):

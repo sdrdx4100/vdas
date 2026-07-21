@@ -1,5 +1,5 @@
 /* 保存ビュー・ラベルセットタブ、および各タブから使うラベルセット共通処理 */
-import { $, api, toast, esc } from "./api.js";
+import { $, $$, api, toast, esc } from "./api.js";
 import { state } from "./state.js";
 import { renderFilters } from "./filters.js";
 import { gotoPage } from "./nav.js";
@@ -85,12 +85,24 @@ export async function refreshViewsPage() {
 
 async function loadView(v) {
   if (v.kind === "explore") {
-    const { EX_VISIBILITY, exUpdateControls, plotExplore } = await import("./explore.js");
+    const { EX_VISIBILITY, exUpdateControls, plotExplore, setExSource, renderExGroupTags, exRefreshSchema } =
+      await import("./explore.js");
     const c = v.config || {};
-    $("#ex-dataset").value = v.dataset_id || "";
-    state.ex.schema = null;
-    gotoPage("explore");
-    await waitFor(() => state.ex.schema);
+    if (c.source === "groups") {
+      // gotoPage より先にソースを切り替え、データセット側ハンドラの誤発火を防ぐ
+      state.ex.groupTags = new Set(c.group_tags || []);
+      setExSource("groups");
+      gotoPage("explore");
+      renderExGroupTags();
+      await exRefreshSchema();
+    } else {
+      setExSource("dataset");
+      $("#ex-dataset").value = v.dataset_id || "";
+      state.ex.schema = null;
+      gotoPage("explore");
+      $("#ex-dataset").dispatchEvent(new Event("change"));
+      await waitFor(() => state.ex.schema);
+    }
     if (c.chart_kind && EX_VISIBILITY[c.chart_kind]) {
       state.ex.kind = c.chart_kind;
       $$("#ex-kind .chart-kind").forEach((b) =>

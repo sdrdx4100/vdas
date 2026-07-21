@@ -85,3 +85,64 @@ def test_cohort_histogram_as_category(ingest_csv) -> None:
     assert res["kind"] == "categorical"
     for cohort in res["cohorts"]:
         assert sum(cohort["pooled_percents"]) == pytest.approx(100.0, abs=0.01)
+
+
+def test_chart_groups_bar_share(ingest_csv) -> None:
+    a = ingest_csv(CSV_A, filename="a.csv", tags=["A社"])
+    b = ingest_csv(CSV_B, filename="b.csv", tags=["B社"])
+    res = queries.chart_groups(
+        [
+            {"label": "A社", "dataset_ids": [a["id"]]},
+            {"label": "B社", "dataset_ids": [b["id"]]},
+        ],
+        "bar", x="gear", agg="share",
+    )
+    assert res["categories"] == ["1", "2", "3"]
+    assert [s["label"] for s in res["series"]] == ["A社", "B社"]
+    for series in res["series"]:
+        assert sum(v for v in series["values"] if v is not None) == pytest.approx(100.0, abs=0.01)
+    assert [s["label"] for s in res["stats"]] == ["A社", "B社"]
+
+
+def test_chart_groups_pools_members(ingest_csv) -> None:
+    a1 = ingest_csv(CSV_A, filename="a1.csv")
+    a2 = ingest_csv(CSV_A, filename="a2.csv")
+    b = ingest_csv(CSV_B, filename="b.csv")
+    res = queries.chart_groups(
+        [
+            {"label": "A社", "dataset_ids": [a1["id"], a2["id"]]},
+            {"label": "B社", "dataset_ids": [b["id"]]},
+        ],
+        "histogram", x="speed", bins=5,
+    )
+    assert res["sub"] == "numeric"
+    assert sum(res["series"][0]["counts"]) == 12  # 2ログ分がプールされる
+    assert sum(res["series"][1]["counts"]) == 4
+
+
+def test_chart_groups_scatter_and_heatmap(ingest_csv) -> None:
+    a = ingest_csv(CSV_A, filename="a.csv")
+    b = ingest_csv(CSV_B, filename="b.csv")
+    groups = [
+        {"label": "A", "dataset_ids": [a["id"]]},
+        {"label": "B", "dataset_ids": [b["id"]]},
+    ]
+    scatter = queries.chart_groups(groups, "scatter", x="speed", y="rpm")
+    assert len(scatter["series"]) == 2
+    assert scatter["series"][0]["total_rows"] == 6
+    heatmap = queries.chart_groups(groups, "heatmap", x="speed", y="rpm", bins=10)
+    assert len(heatmap["series"]) == 2
+    assert len(heatmap["series"][0]["matrix"]) == 10
+
+
+def test_chart_groups_missing_column_names_group(ingest_csv) -> None:
+    a = ingest_csv(CSV_A, filename="a.csv")
+    b = ingest_csv("time,other\n0,1\n", filename="b.csv")
+    with pytest.raises(queries.QueryError, match="B"):
+        queries.chart_groups(
+            [
+                {"label": "A", "dataset_ids": [a["id"]]},
+                {"label": "B", "dataset_ids": [b["id"]]},
+            ],
+            "histogram", x="speed",
+        )

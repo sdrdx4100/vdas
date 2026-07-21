@@ -175,6 +175,29 @@ def post_chart(dataset_id: str, req: ChartRequest):
                  req.agg, req.bins, [f.model_dump() for f in req.filters], req.max_points)
 
 
+class ChartGroupSpec(BaseModel):
+    label: str = Field(min_length=1, max_length=80)
+    dataset_ids: list[str] = Field(min_length=1)
+
+
+class ChartGroupsRequest(BaseModel):
+    groups: list[ChartGroupSpec] = Field(min_length=1)
+    kind: str
+    x: str | None = None
+    y: str | None = None
+    agg: str = "avg"
+    bins: int = 40
+    filters: list[FilterSpec] = []
+    max_points: int | None = None
+
+
+@router.post("/chart/groups")
+def post_chart_groups(req: ChartGroupsRequest):
+    return _wrap(queries.chart_groups, [g.model_dump() for g in req.groups],
+                 req.kind, req.x, req.y, req.agg, req.bins,
+                 [f.model_dump() for f in req.filters], req.max_points)
+
+
 # ---------- クラスタリング ----------
 
 class ClusteringRequest(BaseModel):

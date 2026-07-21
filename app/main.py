@@ -1,7 +1,8 @@
 """VDAS — Vehicle Data Analysis Studio.
 
-ローカルサーバーとして起動する車両データ可視化ダッシュボード。
-  python run.py  →  http://127.0.0.1:8710
+ローカルまたはLAN内サーバーとして起動する車両データ可視化ダッシュボード。
+  python run.py        →  http://127.0.0.1:8710
+  python run.py --lan  →  http://<このPCのIP>:8710
 """
 from __future__ import annotations
 

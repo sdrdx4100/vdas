@@ -9,6 +9,7 @@ from . import db, ingest, queries
 
 MAX_2D_BINS = 100
 COHORT_METRICS = {"avg", "q50", "q75"}
+MAX_MULTI_SIGNALS = 20
 
 
 def resolve_cohorts(specs: list[dict[str, Any]]) -> dict[str, Any]:
@@ -185,6 +186,28 @@ def compare_dataset_summary(
         "comparison": comparisons[0] if comparisons else None,
         "comparisons": comparisons,
         "overlaps": resolution["overlaps"],
+    }
+
+
+def compare_multi_summary(
+    specs: list[dict[str, Any]],
+    columns: list[str],
+    metric: str = "avg",
+    filters: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """複数信号のデータセット単位要約を、同じタググループ定義でまとめて返す。"""
+    unique_columns = list(dict.fromkeys(column.strip() for column in columns if column.strip()))
+    if not unique_columns:
+        raise queries.QueryError("分析する信号を1つ以上指定してください")
+    if len(unique_columns) > MAX_MULTI_SIGNALS:
+        raise queries.QueryError(f"複数信号分析は{MAX_MULTI_SIGNALS}信号までです")
+    return {
+        "metric": metric,
+        "columns": unique_columns,
+        "results": [
+            compare_dataset_summary(specs, column, metric, filters)
+            for column in unique_columns
+        ],
     }
 
 

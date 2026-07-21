@@ -20,6 +20,8 @@ def test_comparison_workspace_and_modules_are_served() -> None:
             "cmp-cohort-2d-chart",
             "cmp-cohort-stat-summary",
             "cmp-cohort-stat-chart",
+            "cmp-multi-signals",
+            "cmp-multi-chart",
             "cmp-add-cohort",
             "cmp-cohort-builders",
             "cmp-transition-chart",

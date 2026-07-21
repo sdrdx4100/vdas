@@ -300,6 +300,23 @@
       <div class="card">
         <div class="cohort-result-header">
           <div>
+            <h2>複数信号を並べて比較</h2>
+            <p class="hint">信号ごとに独立したY軸で、各ログの代表値とグループ内のばらつきを並べます。</p>
+          </div>
+          <span class="selection-summary" id="cmp-multi-summary">0 信号選択中</span>
+        </div>
+        <div class="controls-row" style="margin-bottom:8px;">
+          <input type="search" id="cmp-multi-search" placeholder="信号名で絞り込み…" style="flex:1; max-width:320px;">
+          <button class="btn subtle" id="cmp-multi-select-visible" type="button">表示中を全選択</button>
+          <button class="btn subtle" id="cmp-multi-clear" type="button">選択解除</button>
+        </div>
+        <div class="col-picker" id="cmp-multi-signals" style="max-height:180px;"></div>
+        <div class="chart tall" id="cmp-multi-chart" style="margin-top:12px;"></div>
+      </div>
+
+      <div class="card">
+        <div class="cohort-result-header">
+          <div>
             <h2>データセット単位の集合統計</h2>
             <p class="hint">各ログの代表値を1標本として比較します。行数の多いログだけが結果を支配しません。</p>
           </div>

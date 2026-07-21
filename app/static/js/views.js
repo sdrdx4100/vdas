@@ -3,7 +3,7 @@ import { $, api, toast, esc } from "./api.js";
 import { state } from "./state.js";
 import { renderFilters } from "./filters.js";
 import { gotoPage } from "./nav.js";
-import { renderCmpCohorts, setCmpMode, runCompare } from "./compare.js";
+import { renderCmpCohorts, setCmpMode, setCmpMultiSignals, runCompare } from "./compare.js";
 import { setTsSelectedColumns, plotTimeseries } from "./timeseries.js";
 import { loadSummary } from "./stats.js";
 
@@ -113,6 +113,7 @@ async function loadView(v) {
       setValue("#cmp-transition-denominator", c.transition_denominator);
       if (c.normalization) $("#cmp-cohort-normalization").value = c.normalization;
       if (c.statistic) $("#cmp-cohort-statistic").value = c.statistic;
+      if (c.multi_signals) setCmpMultiSignals(c.multi_signals);
       if (c.transition_scale) $("#cmp-transition-scale").value = c.transition_scale;
       runCompare();
       toast(`ビュー「${v.name}」を読み込みました`);

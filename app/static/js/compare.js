@@ -202,6 +202,8 @@ export async function updateCmpColumns(idsOverride = null) {
     cohortX.innerHTML = ""; cohortY.innerHTML = "";
     transitionState.innerHTML = ""; transitionOrder.innerHTML = "";
     transitionDenominator.innerHTML = '<option value="">1,000行あたり</option>';
+    $("#cmp-multi-signals").innerHTML = "";
+    $("#cmp-multi-summary").textContent = `${state.cmp.multiSignals.size} 信号選択中`;
     state.cmp.schema = null;
     return;
   }
@@ -224,6 +226,7 @@ export async function updateCmpColumns(idsOverride = null) {
   renderFilters("#cmp-filters", state.cmp);
 
   const numeric = common.filter((c) => c.kind === "numeric");
+  renderCmpMultiSignals(numeric);
   const numOpts = numeric.map((c) => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join("");
   sigSel.innerHTML = numOpts;
   cxSel.innerHTML = numOpts;
@@ -284,6 +287,73 @@ export async function updateCmpColumns(idsOverride = null) {
   }
   keep(transitionDenominator, prevTransitionDenominator);
 }
+
+function selectedCmpMultiSignals() {
+  const numeric = (state.cmp.schema?.columns || []).filter((column) => column.kind === "numeric");
+  return numeric.map((column) => column.name)
+    .filter((name) => state.cmp.multiSignals.has(name));
+}
+
+function renderCmpMultiSignals(numeric = null) {
+  const columns = numeric || (state.cmp.schema?.columns || [])
+    .filter((column) => column.kind === "numeric");
+  const allowed = new Set(columns.map((column) => column.name));
+  state.cmp.multiSignals = new Set(
+    [...state.cmp.multiSignals].filter((name) => allowed.has(name))
+  );
+  if (!state.cmp.multiSignalsInitialized && columns.length) {
+    columns.slice(0, 4).forEach((column) => state.cmp.multiSignals.add(column.name));
+    state.cmp.multiSignalsInitialized = true;
+  }
+  const query = $("#cmp-multi-search").value.trim().toLowerCase();
+  const visible = columns.filter((column) => !query || column.name.toLowerCase().includes(query));
+  const wrap = $("#cmp-multi-signals");
+  wrap.innerHTML = "";
+  for (const column of visible) {
+    const label = document.createElement("label");
+    label.innerHTML = `<input type="checkbox" value="${esc(column.name)}"><span>${esc(column.name)}</span><span class="col-type">${esc(column.type)}</span>`;
+    label.querySelector("input").checked = state.cmp.multiSignals.has(column.name);
+    wrap.appendChild(label);
+  }
+  $("#cmp-multi-summary").textContent =
+    `${state.cmp.multiSignals.size} 信号選択中 / ${visible.length} 件表示`;
+}
+
+export function setCmpMultiSignals(columns) {
+  state.cmp.multiSignals = new Set(columns || []);
+  state.cmp.multiSignalsInitialized = true;
+  renderCmpMultiSignals();
+}
+
+$("#cmp-multi-search").addEventListener("input", () => renderCmpMultiSignals());
+$("#cmp-multi-signals").addEventListener("change", (event) => {
+  const input = event.target.closest('input[type="checkbox"]');
+  if (!input) return;
+  if (input.checked && state.cmp.multiSignals.size >= 12) {
+    input.checked = false;
+    return toast("並列比較は12信号まで選択できます", "error");
+  }
+  input.checked ? state.cmp.multiSignals.add(input.value) : state.cmp.multiSignals.delete(input.value);
+  state.cmp.multiSignalsInitialized = true;
+  renderCmpMultiSignals();
+  cmpAutoRun();
+});
+$("#cmp-multi-select-visible").addEventListener("click", () => {
+  const visible = $$("#cmp-multi-signals input").map((input) => input.value);
+  const available = Math.max(0, 12 - state.cmp.multiSignals.size);
+  visible.filter((name) => !state.cmp.multiSignals.has(name)).slice(0, available)
+    .forEach((name) => state.cmp.multiSignals.add(name));
+  state.cmp.multiSignalsInitialized = true;
+  renderCmpMultiSignals();
+  cmpAutoRun();
+});
+$("#cmp-multi-clear").addEventListener("click", () => {
+  state.cmp.multiSignals.clear();
+  state.cmp.multiSignalsInitialized = true;
+  renderCmpMultiSignals();
+  chartRegistry.delete("cmp-multi-chart");
+  Plotly.purge("cmp-multi-chart");
+});
 
 $("#cmp-add-filter").addEventListener("click", () => {
   if (!state.cmp.schema) return toast("先に比較対象を選択してください", "error");
@@ -385,23 +455,34 @@ async function runCohortCompare(auto = false) {
   const filters = activeFilters(state.cmp);
   const normalization = $("#cmp-cohort-normalization").value;
   const statistic = $("#cmp-cohort-statistic").value;
+  const multiSignals = selectedCmpMultiSignals();
   const runToken = ++state.cmp.cohortRunToken;
   const ctx = {
     mode: "cohorts", cohorts: cohortPayload(), signal, x, y, filters, normalization, statistic,
   };
   state.cmp.last = ctx;
   try {
-    const [histogram, histogram2d, datasetSummary] = await Promise.all([
+    const [histogram, histogram2d, datasetSummary, multiSummary] = await Promise.all([
       cohortPost("/api/compare/cohorts/histogram", { column: signal, bins: 40, filters }),
       canRender2d
         ? cohortPost("/api/compare/cohorts/histogram2d", { x, y, bins_x: 32, bins_y: 32, filters })
         : Promise.resolve(null),
       cohortPost("/api/compare/cohorts/summary", { column: signal, metric: statistic, filters }),
+      multiSignals.length
+        ? cohortPost("/api/compare/cohorts/multisummary", {
+          columns: multiSignals, metric: statistic, filters,
+        })
+        : Promise.resolve(null),
     ]);
     if (runToken !== state.cmp.cohortRunToken) return;
     renderCohortSummary(resolution, histogram);
     renderCohortHistogram(histogram, normalization);
     renderCohortDatasetSummary(datasetSummary);
+    if (multiSummary) renderCohortMultiSummary(multiSummary);
+    else {
+      chartRegistry.delete("cmp-multi-chart");
+      Plotly.purge("cmp-multi-chart");
+    }
     if (histogram2d) renderCohortHistogram2d(histogram2d, normalization);
     else {
       chartRegistry.delete("cmp-cohort-2d-chart");
@@ -410,7 +491,7 @@ async function runCohortCompare(auto = false) {
     await renderCohortTransitions(filters, normalization, runToken);
     if (runToken !== state.cmp.cohortRunToken) return;
     requestAnimationFrame(() => {
-      ["cmp-cohort-hist-chart", "cmp-cohort-stat-chart", "cmp-cohort-2d-chart",
+      ["cmp-cohort-hist-chart", "cmp-cohort-stat-chart", "cmp-multi-chart", "cmp-cohort-2d-chart",
         "cmp-transition-chart"].forEach((id) => {
         const element = document.getElementById(id);
         if (element?.data) Plotly.Plots.resize(element);
@@ -420,6 +501,50 @@ async function runCohortCompare(auto = false) {
     if (runToken !== state.cmp.cohortRunToken) return;
     toast(`比較エラー: ${error.message}`, "error");
   }
+}
+
+function renderCohortMultiSummary(result) {
+  if (!result.results.length) return;
+  const signalCount = result.results.length;
+  const columns = signalCount === 1 ? 1 : 2;
+  const rows = Math.ceil(signalCount / columns);
+  const colors = seriesColors();
+  const traces = [];
+  const layout = baseLayout({
+    height: Math.max(480, rows * 280 + 80),
+    margin: { l: 72, r: 28, t: 42, b: 54 },
+    grid: { rows, columns, pattern: "independent", xgap: 0.12, ygap: 0.16 },
+    boxmode: "group",
+    showlegend: true,
+  });
+  result.results.forEach((signal, signalIndex) => {
+    const axisNumber = signalIndex + 1;
+    const suffix = axisNumber === 1 ? "" : axisNumber;
+    const xKey = axisNumber === 1 ? "xaxis" : `xaxis${axisNumber}`;
+    const yKey = axisNumber === 1 ? "yaxis" : `yaxis${axisNumber}`;
+    layout[xKey] = { type: "category", gridcolor: cssVar("--chart-grid") };
+    layout[yKey] = {
+      title: { text: signal.column }, automargin: true,
+      gridcolor: cssVar("--chart-grid"), zerolinecolor: cssVar("--chart-axis"),
+    };
+    signal.cohorts.forEach((cohort, cohortIndex) => {
+      traces.push({
+        type: "box", name: cohort.name,
+        x: cohort.values.map(() => cohort.name), y: cohort.values,
+        xaxis: `x${suffix}`, yaxis: `y${suffix}`,
+        legendgroup: cohort.name, showlegend: signalIndex === 0,
+        boxpoints: "all", jitter: 0.25, pointpos: 0,
+        marker: { color: colors[cohortIndex % colors.length], size: 6, opacity: 0.72 },
+        line: { color: colors[cohortIndex % colors.length] },
+        customdata: cohort.datasets.filter((dataset) => dataset.value != null)
+          .map((dataset) => dataset.dataset_name),
+        hovertemplate: "%{customdata}<br>代表値=%{y}<extra>%{fullData.name}</extra>",
+      });
+    });
+  });
+  renderChart("cmp-multi-chart", () => Plotly.react(
+    "cmp-multi-chart", traces, layout, PLOT_CONFIG
+  ));
 }
 
 function renderCohortDatasetSummary(result) {
@@ -881,6 +1006,7 @@ $("#cmp-save-view").addEventListener("click", async () => {
   const cohortConfig = state.cmp.mode === "cohorts" ? {
     mode: "cohorts",
     cohorts: cohortPayload(),
+    multi_signals: selectedCmpMultiSignals(),
     normalization: $("#cmp-cohort-normalization").value,
     statistic: $("#cmp-cohort-statistic").value,
     cohort_x: $("#cmp-cohort-x").value || null,

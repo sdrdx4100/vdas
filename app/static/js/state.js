@@ -15,6 +15,8 @@ export const state = {
     cohortSpecs: [
       { name: "グループ1", tags: new Set(), match: "all" },
     ],
+    multiSignals: new Set(),
+    multiSignalsInitialized: false,
     cohortResolution: null,
     cohortResolveToken: 0,
     cohortRunToken: 0,

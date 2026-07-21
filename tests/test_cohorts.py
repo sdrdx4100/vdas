@@ -135,10 +135,13 @@ def test_cohort_dataset_summary_compares_multiple_groups_to_first(ingest_csv) ->
     ]
 
     result = cohorts.compare_dataset_summary(groups, "speed", metric="avg")
+    multi = cohorts.compare_multi_summary(groups, ["speed"], metric="avg")
 
     assert [cohort["name"] for cohort in result["cohorts"]] == ["基準群", "条件2群", "条件3群"]
     assert [item["comparison"] for item in result["comparisons"]] == ["条件2群", "条件3群"]
     assert [item["difference"] for item in result["comparisons"]] == [10.0, 20.0]
+    assert multi["columns"] == ["speed"]
+    assert len(multi["results"][0]["cohorts"]) == 3
 
 
 def test_cohort_transitions_compare_event_frequency(ingest_csv) -> None:
@@ -191,6 +194,10 @@ def test_cohort_api_resolves_and_aggregates(ingest_csv) -> None:
             "/api/compare/cohorts/summary",
             json={**payload, "column": "speed", "metric": "q50", "filters": []},
         )
+        multi_summary = client.post(
+            "/api/compare/cohorts/multisummary",
+            json={**payload, "columns": ["speed", "rpm"], "metric": "avg", "filters": []},
+        )
         transitions = client.post(
             "/api/compare/cohorts/transitions",
             json={**payload, "state_column": "gear", "order_by": "time"},
@@ -204,6 +211,8 @@ def test_cohort_api_resolves_and_aggregates(ingest_csv) -> None:
     assert [item["total_points"] for item in histogram2d.json()["cohorts"]] == [6, 6]
     assert summary.status_code == 200
     assert [item["summary"]["n"] for item in summary.json()["cohorts"]] == [1, 1]
+    assert multi_summary.status_code == 200
+    assert multi_summary.json()["columns"] == ["speed", "rpm"]
     assert transitions.status_code == 200
     assert [item["total_events"] for item in transitions.json()["cohorts"]] == [2, 4]
 

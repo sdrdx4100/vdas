@@ -27,21 +27,30 @@ export function renderCmpTagFilter() {
 }
 
 function cohortPayload() {
-  return state.cmp.cohortSpecs.map((spec) => ({
+  return activeCohortSpecs().map((spec) => ({
     name: spec.name,
     tags: [...spec.tags],
     match: spec.match,
   }));
 }
 
+function activeCohortSpecs() {
+  if (state.cmp.cohortAnalysisMode === "a") return state.cmp.cohortSpecs.slice(0, 1);
+  if (state.cmp.cohortAnalysisMode === "b") return state.cmp.cohortSpecs.slice(1, 2);
+  return state.cmp.cohortSpecs;
+}
+
 function cohortsReady() {
-  return state.cmp.cohortSpecs.every((spec) => spec.tags.size > 0);
+  return activeCohortSpecs().every((spec) => spec.tags.size > 0);
 }
 
 export function renderCmpCohorts() {
+  const mode = state.cmp.cohortAnalysisMode;
+  $(".cohort-builder-grid").classList.toggle("single", mode !== "compare");
   $$(".cohort-builder").forEach((builder) => {
     const index = Number(builder.dataset.cohortIndex);
     const spec = state.cmp.cohortSpecs[index];
+    builder.hidden = (mode === "a" && index === 1) || (mode === "b" && index === 0);
     const match = builder.querySelector(".cohort-match");
     const tags = builder.querySelector(".cohort-tags");
     match.value = spec.match;
@@ -68,7 +77,15 @@ export function renderCmpCohorts() {
       tags.appendChild(chip);
     }
   });
+  $("#cmp-analysis-mode").value = mode;
 }
+
+$("#cmp-analysis-mode").addEventListener("change", () => {
+  state.cmp.cohortAnalysisMode = $("#cmp-analysis-mode").value;
+  state.cmp.cohortResolution = null;
+  renderCmpCohorts();
+  resolveCmpCohorts(true);
+});
 
 export async function resolveCmpCohorts(autoRun = false) {
   const resolveToken = ++state.cmp.cohortResolveToken;
@@ -77,7 +94,10 @@ export async function resolveCmpCohorts(autoRun = false) {
     state.cmp.cohortResolution = null;
     state.cmp.schema = null;
     status.className = "cohort-status";
-    status.textContent = "A/Bそれぞれにタグを1つ以上選択してください。";
+    const target = state.cmp.cohortAnalysisMode === "compare"
+      ? "A/Bそれぞれ"
+      : `${state.cmp.cohortAnalysisMode.toUpperCase()}集合`;
+    status.textContent = `${target}にタグを1つ以上選択してください。`;
     await updateCmpColumns([]);
     return null;
   }
@@ -339,7 +359,7 @@ function cohortPost(path, body) {
 async function runCohortCompare(auto = false) {
   let resolution = state.cmp.cohortResolution;
   if (!resolution) resolution = await resolveCmpCohorts(false);
-  if (!resolution) return auto || toast("A/Bのタグ条件を指定してください", "error");
+  if (!resolution) return auto || toast("分析する集合のタグ条件を指定してください", "error");
   const signal = $("#cmp-signal").value;
   const x = $("#cmp-cohort-x").value;
   const y = $("#cmp-cohort-y").value;
@@ -472,11 +492,35 @@ function matrixDifference(left, right) {
 }
 
 function renderCohortHistogram2d(result, normalization) {
-  if (result.cohorts.length < 2) return;
+  if (!result.cohorts.length) {
+    chartRegistry.delete("cmp-cohort-2d-chart");
+    Plotly.purge("cmp-cohort-2d-chart");
+    return;
+  }
   const x = result.x_edges.slice(0, -1).map((edge, index) => (edge + result.x_edges[index + 1]) / 2);
   const y = result.y_edges.slice(0, -1).map((edge, index) => (edge + result.y_edges[index + 1]) / 2);
-  const first = result.cohorts[0], second = result.cohorts[1];
-  const firstZ = first[normalization], secondZ = second[normalization];
+  const first = result.cohorts[0];
+  const firstZ = first[normalization];
+  if (result.cohorts.length === 1) {
+    renderChart("cmp-cohort-2d-chart", () => Plotly.react(
+      "cmp-cohort-2d-chart",
+      [{
+        type: "heatmap", x, y, z: firstZ, name: first.name, colorscale: "Viridis",
+        colorbar: { title: { text: "割合 (%)" }, thickness: 10 },
+        hovertemplate: `${esc(first.name)}<br>${esc(result.x)}=%{x}<br>${esc(result.y)}=%{y}<br>%{z:.3f}%<extra></extra>`,
+      }],
+      baseLayout({
+        margin: { l: 55, r: 65, t: 30, b: 50 },
+        xaxis: Object.assign(baseLayout().xaxis, { title: { text: result.x } }),
+        yaxis: Object.assign(baseLayout().yaxis, { title: { text: result.y } }),
+        showlegend: false,
+      }),
+      PLOT_CONFIG,
+    ));
+    return;
+  }
+  const second = result.cohorts[1];
+  const secondZ = second[normalization];
   const difference = matrixDifference(firstZ, secondZ);
   const maxDensity = Math.max(...firstZ.flat(), ...secondZ.flat(), 0.000001);
   const maxDifference = Math.max(...difference.flat().map(Math.abs), 0.000001);
@@ -759,6 +803,7 @@ $("#cmp-save-view").addEventListener("click", async () => {
   if (!name) return;
   const cohortConfig = state.cmp.mode === "cohorts" ? {
     mode: "cohorts",
+    analysis_mode: state.cmp.cohortAnalysisMode,
     cohorts: cohortPayload(),
     normalization: $("#cmp-cohort-normalization").value,
     statistic: $("#cmp-cohort-statistic").value,

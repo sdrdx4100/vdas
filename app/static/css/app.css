@@ -595,6 +595,8 @@ table.data td.num { font-variant-numeric: tabular-nums; }
   gap: 14px;
 }
 
+.cohort-builder-grid.single { grid-template-columns: 1fr; }
+
 .cohort-builder {
   padding: 14px;
   border: 1px solid var(--card-border);

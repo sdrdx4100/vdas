@@ -13,8 +13,8 @@ COHORT_METRICS = {"avg", "q50", "q75"}
 
 def resolve_cohorts(specs: list[dict[str, Any]]) -> dict[str, Any]:
     """タグ条件をデータセットIDへ解決し、グループ間の重複も返す。"""
-    if len(specs) < 2:
-        raise queries.QueryError("比較グループを2つ以上指定してください")
+    if not specs:
+        raise queries.QueryError("分析するタグ集合を1つ以上指定してください")
 
     datasets = ingest.list_datasets()
     names: set[str] = set()
@@ -85,7 +85,9 @@ def compare_histogram(
     """グループごとの共通ビン分布を、プール値とデータセット均等重みで返す。"""
     resolution = resolve_cohorts(specs)
     dataset_ids = _unique_dataset_ids(resolution["cohorts"])
-    base = queries.compare_histogram(dataset_ids, column, bins, filters)
+    base = queries.compare_histogram(
+        dataset_ids, column, bins, filters, minimum_datasets=1
+    )
     by_dataset = {series["dataset_id"]: series for series in base["series"]}
 
     cohort_series = []
@@ -130,7 +132,7 @@ def compare_dataset_summary(
 
     resolution = resolve_cohorts(specs)
     dataset_ids = _unique_dataset_ids(resolution["cohorts"])
-    base = queries.compare_summary(dataset_ids, column, filters)
+    base = queries.compare_summary(dataset_ids, column, filters, minimum_datasets=1)
     by_dataset = {series["dataset_id"]: series for series in base["series"]}
     dataset_names = {
         dataset["id"]: dataset["name"]
@@ -200,7 +202,7 @@ def compare_histogram2d(
 
     resolution = resolve_cohorts(specs)
     dataset_ids = _unique_dataset_ids(resolution["cohorts"])
-    tables = queries._compare_tables(dataset_ids, x, y)
+    tables = queries._compare_tables(dataset_ids, x, y, minimum=1)
     for _, _, columns in tables:
         if columns[x]["kind"] != "numeric" or columns[y]["kind"] != "numeric":
             raise queries.QueryError("2次元分布の X / Y には数値列を指定してください")
@@ -290,7 +292,7 @@ def compare_transitions(
     required = [state_column, order_by]
     if denominator_column:
         required.append(denominator_column)
-    tables = queries._compare_tables(dataset_ids, *required)
+    tables = queries._compare_tables(dataset_ids, *required, minimum=1)
 
     per_dataset = {}
     totals: dict[str, int] = {}

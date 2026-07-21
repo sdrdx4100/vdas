@@ -88,14 +88,26 @@ async function loadView(v) {
   if (v.kind === "compare") {
     gotoPage("compare");
     if (c.mode === "cohorts") {
-      state.cmp.cohortSpecs = (c.cohorts || []).slice(0, 2).map((cohort, index) => ({
-        name: cohort.name || (index ? "B" : "A"),
-        tags: new Set(cohort.tags || []),
-        match: cohort.match === "any" ? "any" : "all",
-      }));
-      while (state.cmp.cohortSpecs.length < 2) {
-        const index = state.cmp.cohortSpecs.length;
-        state.cmp.cohortSpecs.push({ name: index ? "B" : "A", tags: new Set(), match: "all" });
+      const savedCohorts = (c.cohorts || []).slice(0, 2);
+      const inferredMode = savedCohorts.length >= 2
+        ? "compare"
+        : (savedCohorts[0]?.name === "B" ? "b" : "a");
+      state.cmp.cohortAnalysisMode = ["a", "b", "compare"].includes(c.analysis_mode)
+        ? c.analysis_mode
+        : inferredMode;
+      state.cmp.cohortSpecs = [
+        { name: "A", tags: new Set(), match: "all" },
+        { name: "B", tags: new Set(), match: "all" },
+      ];
+      for (const [savedIndex, cohort] of savedCohorts.entries()) {
+        const index = cohort.name === "B" || (state.cmp.cohortAnalysisMode === "b" && savedCohorts.length === 1)
+          ? 1
+          : savedIndex;
+        state.cmp.cohortSpecs[index] = {
+          name: index ? "B" : "A",
+          tags: new Set(cohort.tags || []),
+          match: cohort.match === "any" ? "any" : "all",
+        };
       }
       renderCmpCohorts();
       await setCmpMode("cohorts");

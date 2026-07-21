@@ -16,6 +16,7 @@ export const state = {
       { name: "A", tags: new Set(), match: "all" },
       { name: "B", tags: new Set(), match: "all" },
     ],
+    cohortAnalysisMode: "compare",    // a | b | compare
     cohortResolution: null,
     cohortResolveToken: 0,
     cohortRunToken: 0,

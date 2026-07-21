@@ -258,7 +258,7 @@ class CohortSpec(BaseModel):
 
 
 class CohortResolveRequest(BaseModel):
-    cohorts: list[CohortSpec] = Field(min_length=2)
+    cohorts: list[CohortSpec] = Field(min_length=1)
 
 
 class CohortHistogramRequest(CohortResolveRequest):

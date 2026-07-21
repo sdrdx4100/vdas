@@ -57,6 +57,23 @@ def test_resolve_cohorts_rejects_empty_groups(ingest_csv) -> None:
         cohorts.resolve_cohorts(specs())
 
 
+def test_single_tag_cohort_can_be_analyzed_without_comparison(ingest_csv) -> None:
+    ingest_csv(CSV_A, filename="a.csv", tags=["A社"])
+
+    single = [{"name": "A", "tags": ["A社"], "match": "all"}]
+    histogram = cohorts.compare_histogram(single, "speed", bins=5)
+    summary = cohorts.compare_dataset_summary(single, "speed", metric="avg")
+    density = cohorts.compare_histogram2d(single, "speed", "rpm", bins_x=5, bins_y=5)
+    transitions = cohorts.compare_transitions(single, "gear", "time")
+
+    assert [item["name"] for item in histogram["cohorts"]] == ["A"]
+    assert histogram["cohorts"][0]["total_points"] == 6
+    assert summary["cohorts"][0]["summary"]["n"] == 1
+    assert summary["comparison"] is None
+    assert len(density["cohorts"]) == 1
+    assert transitions["cohorts"][0]["total_events"] == 2
+
+
 def test_cohort_histogram_returns_pooled_and_equal_dataset_weights(ingest_csv) -> None:
     ingest_csv(CSV_A, filename="a1.csv", tags=["A社"])
     ingest_csv("speed,rpm\n0,800\n50,1800\n", filename="a2.csv", tags=["A社"])
@@ -174,11 +191,11 @@ def test_cohort_api_resolves_and_aggregates(ingest_csv) -> None:
     assert [item["total_events"] for item in transitions.json()["cohorts"]] == [2, 4]
 
 
-def test_cohort_api_validates_at_least_two_groups() -> None:
+def test_cohort_api_validates_at_least_one_group() -> None:
     with TestClient(app) as client:
         response = client.post(
             "/api/compare/cohorts/resolve",
-            json={"cohorts": [{"name": "A", "tags": ["A社"]}]},
+            json={"cohorts": []},
         )
 
     assert response.status_code == 422

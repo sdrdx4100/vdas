@@ -250,8 +250,19 @@
       </div>
 
       <div id="cmp-cohort-selector">
-        <h2>タグでA/B集合を作る</h2>
-        <p class="hint">個別ファイルではなく、タグ条件に一致するすべてのデータセットが分析対象です。対象件数と共通信号は自動更新されます。</p>
+        <div class="cohort-result-header">
+          <div>
+            <h2>タグで分析対象を作る</h2>
+            <p class="hint">個別ファイルではなく、タグ条件に一致するすべてのデータセットが分析対象です。</p>
+          </div>
+          <label class="field">分析モード
+            <select id="cmp-analysis-mode">
+              <option value="a">A集合のみ</option>
+              <option value="b">B集合のみ</option>
+              <option value="compare" selected>AとBを比較</option>
+            </select>
+          </label>
+        </div>
         <div class="cohort-builder-grid">
           <div class="cohort-builder" data-cohort-index="0">
             <div class="cohort-heading"><span class="cohort-badge cohort-a">A</span><strong>グループA</strong></div>
@@ -268,7 +279,7 @@
             <div class="cohort-tags"></div>
           </div>
         </div>
-        <div id="cmp-cohort-status" class="cohort-status">A/Bそれぞれにタグを1つ以上選択してください。</div>
+        <div id="cmp-cohort-status" class="cohort-status">A集合にタグを1つ以上選択してください。</div>
       </div>
 
       <div class="controls-row" style="margin-top:14px;">
@@ -294,8 +305,8 @@
       <div class="card">
         <div class="cohort-result-header">
           <div>
-            <h2>タググループ比較</h2>
-            <p class="hint">走行量の違いを除く場合は「データセット均等」を使います。</p>
+            <h2>タグ集合の分析</h2>
+            <p class="hint">B集合を有効にすると、同じ指標でA/Bを比較します。走行量の違いを除く場合は「データセット均等」を使います。</p>
           </div>
           <label class="field">正規化
             <select id="cmp-cohort-normalization">

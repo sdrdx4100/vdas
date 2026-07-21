@@ -233,10 +233,14 @@ def scatter(dataset_id: str, x: str, y: str, color: str | None = None,
     return {"total_rows": total, "returned_rows": len(rows), "data": out}
 
 
-def _compare_tables(dataset_ids: list[str], *needed: str) -> list[tuple[str, str, dict[str, dict[str, Any]]]]:
+def _compare_tables(
+    dataset_ids: list[str], *needed: str, minimum: int = 2
+) -> list[tuple[str, str, dict[str, dict[str, Any]]]]:
     """比較対象の (dataset_id, table, cols) を検証付きで揃える。"""
-    if len(dataset_ids) < 2:
-        raise QueryError("比較には2つ以上のデータセットを選択してください")
+    if len(dataset_ids) < minimum:
+        message = "分析対象のデータセットがありません" if minimum == 1 else \
+            "比較には2つ以上のデータセットを選択してください"
+        raise QueryError(message)
     tables = []
     for ds_id in dataset_ids:
         table, cols = _schema_map(ds_id)
@@ -246,13 +250,14 @@ def _compare_tables(dataset_ids: list[str], *needed: str) -> list[tuple[str, str
 
 
 def compare_histogram(dataset_ids: list[str], column: str, bins: int = 40,
-                      filters: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+                      filters: list[dict[str, Any]] | None = None,
+                      minimum_datasets: int = 2) -> dict[str, Any]:
     """複数データセットを共通のビン境界で集計し、分布を比較可能にする。
 
     データセットごとの行数差を吸収するため、割合 (%) も返す。
     """
     bins = max(5, min(int(bins), 200))
-    tables = _compare_tables(dataset_ids, column)
+    tables = _compare_tables(dataset_ids, column, minimum=minimum_datasets)
 
     if any(cols[column]["kind"] != "numeric" for _, _, cols in tables):
         # カテゴリ列: 全データセット合算の上位カテゴリを共通ラベルにする
@@ -370,10 +375,13 @@ def compare_groupstats(dataset_ids: list[str], column: str, group_by: str,
 
 
 def compare_summary(dataset_ids: list[str], column: str,
-                    filters: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+                    filters: list[dict[str, Any]] | None = None,
+                    minimum_datasets: int = 2) -> dict[str, Any]:
     """選択信号の基本統計量をデータセット間で比較する (フィルタ適用可)。"""
     series = []
-    for ds_id, table, cols in _compare_tables(dataset_ids, column):
+    for ds_id, table, cols in _compare_tables(
+        dataset_ids, column, minimum=minimum_datasets
+    ):
         if cols[column]["kind"] != "numeric":
             raise QueryError(f"信号には数値列を指定してください: {column}")
         q = _quote(column)

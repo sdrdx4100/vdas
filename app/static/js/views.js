@@ -1,12 +1,9 @@
 /* 保存ビュー・ラベルセットタブ、および各タブから使うラベルセット共通処理 */
-import { $, $$, api, toast, esc } from "./api.js";
+import { $, api, toast, esc } from "./api.js";
 import { state } from "./state.js";
 import { renderFilters } from "./filters.js";
 import { gotoPage } from "./nav.js";
-import {
-  renderCmpTagFilter, renderCmpDatasets, renderCmpCohorts,
-  setCmpMode, updateCmpColumns, runCompare,
-} from "./compare.js";
+import { renderCmpCohorts, setCmpMode, runCompare } from "./compare.js";
 import { setTsSelectedColumns, plotTimeseries } from "./timeseries.js";
 import { loadSummary } from "./stats.js";
 
@@ -122,23 +119,7 @@ async function loadView(v) {
       toast(`ビュー「${v.name}」を読み込みました`);
       return;
     }
-    await setCmpMode("datasets");
-    state.cmp.tagFilter.clear();
-    renderCmpTagFilter();
-    renderCmpDatasets();
-    $$("#cmp-datasets input").forEach((el) => { el.checked = (c.dataset_ids || []).includes(el.value); });
-    state.cmp.filters = (c.filters || []).map((f) => ({ ...f }));
-    await updateCmpColumns();
-    const setIf = (sel, v) => {
-      if (v && [...$(sel).options].some((o) => o.value === v)) $(sel).value = v;
-    };
-    setIf("#cmp-signal", c.signal);
-    setIf("#cmp-groupby", c.group_by);
-    setIf("#cmp-baseline", c.baseline);
-    setIf("#cmp-curve-x", c.curve_x);
-    setIf("#cmp-curve-y", c.curve_y);
-    runCompare();
-    toast(`ビュー「${v.name}」を読み込みました`);
+    toast("個別データセット形式の旧比較ビューは、タグ集合へ設定し直してください", "error");
     return;
   }
   if (v.kind === "timeseries") {

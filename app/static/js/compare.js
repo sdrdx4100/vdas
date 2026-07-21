@@ -1,4 +1,4 @@
-/* 比較可視化タブ: データセット横断の統計比較 (分布・CDF・グループ別・特性カーブ・差分ランキング) */
+/* 自由分析タブ: タグで定義したデータセット集合A/Bの統計比較 */
 import { $, $$, api, toast, debounce, esc } from "./api.js";
 import { state } from "./state.js";
 import { loadSchema, renderFilters, activeFilters } from "./filters.js";
@@ -257,21 +257,17 @@ $("#cmp-add-filter").addEventListener("click", () => {
 const cmpAutoRun = debounce(() => runCompare(true), 600);
 state.cmp.onChange = cmpAutoRun;
 
-export async function setCmpMode(mode, autoRun = false) {
-  state.cmp.mode = mode === "cohorts" ? "cohorts" : "datasets";
+export async function setCmpMode(_mode = "cohorts", autoRun = false) {
+  // 自由分析はタグで定義した集合比較に統一する。
+  state.cmp.mode = "cohorts";
   $$("[data-cmp-mode]").forEach((button) =>
     button.classList.toggle("active", button.dataset.cmpMode === state.cmp.mode));
   $("#cmp-dataset-selector").hidden = state.cmp.mode !== "datasets";
   $("#cmp-cohort-selector").hidden = state.cmp.mode !== "cohorts";
   $("#cmp-cohort-results").hidden = state.cmp.mode !== "cohorts";
   $$(".cmp-dataset-only").forEach((element) => { element.hidden = state.cmp.mode !== "datasets"; });
-  if (state.cmp.mode === "cohorts") {
-    renderCmpCohorts();
-    await resolveCmpCohorts(autoRun);
-  } else {
-    await updateCmpColumns();
-    if (autoRun) cmpAutoRun();
-  }
+  renderCmpCohorts();
+  await resolveCmpCohorts(autoRun);
 }
 
 $$("[data-cmp-mode]").forEach((button) => button.addEventListener("click", () =>
@@ -287,14 +283,10 @@ $("#cmp-curve-y").addEventListener("change", () => plotCmpCurve().catch(() => {}
   "#cmp-transition-scale"].forEach((selector) =>
   $(selector).addEventListener("change", cmpAutoRun));
 
-// 比較タブを開いたとき、未選択ならデータセットを自動で選んで比較を始める
+// 自由分析タブを開いたとき、設定済みのタグ集合を再解決する
 export function autoSelectCmpDatasets() {
-  if (state.cmp.mode === "cohorts") return;
-  if (cmpSelectedIds().length >= 2) return;
-  const boxes = $$("#cmp-datasets input");
-  if (boxes.length < 2) return;
-  boxes.slice(0, 2).forEach((el) => { el.checked = true; });
-  updateCmpColumns().then(cmpAutoRun);
+  // 個別ファイルの自動選択は廃止。タグ集合の解決だけを行う。
+  if (cohortsReady()) resolveCmpCohorts(true);
 }
 
 const cmpDsName = (id) => state.datasets.find((d) => d.id === id)?.name || id;

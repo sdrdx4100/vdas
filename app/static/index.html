@@ -29,7 +29,7 @@
   </button>
   <button class="nav-item" data-page="compare">
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="10" height="10" rx="1.5"/><path d="M7 17h9a1 1 0 0 0 1-1V7"/></svg>
-    比較可視化
+    自由分析
   </button>
   <button class="nav-item" data-page="cluster">
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="2.2"/><circle cx="14.5" cy="8" r="2.2"/><circle cx="9" cy="14.5" r="2.2"/><path d="M7.8 7.4l4.6 0M7 8.2l1.2 4.2M13.2 9.8l-3 3.4" stroke-dasharray="1.5 1.8"/></svg>
@@ -232,20 +232,15 @@
     </div>
   </section>
 
-  <!-- ================== 比較可視化 ================== -->
+  <!-- ================== 自由分析 (タグ集合比較) ================== -->
   <section class="page" id="page-compare">
     <div class="page-header">
-      <h1>比較可視化</h1>
-      <p>データセットを2つ以上選ぶと自動で比較が始まります。記録時刻や走行内容が違っても、全体分布・グループ別 (ギア段など)・統計量で公平に比較できます。</p>
+      <h1>自由分析</h1>
+      <p>タグで定義したA/Bのデータ集合を、ログ単位の統計・分布・動作領域・状態遷移で比較します。</p>
     </div>
 
     <div class="card">
-      <div class="comparison-mode-switch" role="group" aria-label="比較対象の選び方">
-        <button class="btn active" type="button" data-cmp-mode="datasets">個別データセット</button>
-        <button class="btn" type="button" data-cmp-mode="cohorts">タググループ A / B</button>
-      </div>
-
-      <div id="cmp-dataset-selector">
+      <div id="cmp-dataset-selector" hidden>
         <h2>比較するデータセット</h2>
         <div class="controls-row" style="margin-bottom:8px;">
           <span style="color:var(--text-secondary); font-size:12px;">タグで絞り込み:</span>
@@ -254,9 +249,9 @@
         <div class="col-picker" id="cmp-datasets" style="max-height:180px;"></div>
       </div>
 
-      <div id="cmp-cohort-selector" hidden>
-        <h2>タグで比較グループを作る</h2>
-        <p class="hint">同じ条件のデータセットをA/Bへまとめます。タグをクリックすると対象件数と共通信号を自動更新します。</p>
+      <div id="cmp-cohort-selector">
+        <h2>タグでA/B集合を作る</h2>
+        <p class="hint">個別ファイルではなく、タグ条件に一致するすべてのデータセットが分析対象です。対象件数と共通信号は自動更新されます。</p>
         <div class="cohort-builder-grid">
           <div class="cohort-builder" data-cohort-index="0">
             <div class="cohort-heading"><span class="cohort-badge cohort-a">A</span><strong>グループA</strong></div>

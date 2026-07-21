@@ -26,6 +26,9 @@ def test_comparison_workspace_and_modules_are_served() -> None:
         for context in ("timeseries", "stats", "cluster"):
             assert f'data-analysis-context="{context}"' in html
         assert '<script type="module" src="/static/js/main.js"></script>' in html
+        assert 'data-cmp-mode="datasets"' not in html
+        assert '<div id="cmp-cohort-selector">' in html
+        assert "個別ファイルではなく、タグ条件に一致するすべてのデータセット" in html
 
         for module in (
             "api.js",

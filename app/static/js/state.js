@@ -6,7 +6,7 @@ export const state = {
   ts: { schema: null, filters: [] },   // 時系列タブ
   st: { schema: null, filters: [] },   // 統計タブ
   cmp: {
-    mode: "datasets",
+    mode: "cohorts",
     tagFilter: new Set(),
     schemas: {},
     schema: null,

@@ -10,11 +10,13 @@ import "./workspace.js";
 import { refreshDatasets } from "./datasets.js";
 import { refreshLabelsets } from "./views.js";
 import { toast } from "./api.js";
+import { setCmpMode } from "./compare.js";
 
 (async function init() {
   try {
     await refreshDatasets();
     await refreshLabelsets();
+    await setCmpMode("cohorts");
   } catch (e) {
     toast(`初期化エラー: ${e.message}`, "error");
   }

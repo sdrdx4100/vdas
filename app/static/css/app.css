@@ -583,21 +583,6 @@ table.data td.num { font-variant-numeric: tabular-nums; }
 
 /* ---------- 比較ワークスペース ---------- */
 
-.comparison-mode-switch {
-  display: inline-flex;
-  gap: 4px;
-  padding: 4px;
-  margin-bottom: 18px;
-  border-radius: 7px;
-  background: var(--subtle-hover);
-}
-
-.comparison-mode-switch .btn { border-color: transparent; }
-.comparison-mode-switch .btn.active {
-  color: var(--accent-text);
-  background: var(--accent);
-}
-
 .hint {
   margin: 0 0 10px;
   color: var(--text-secondary);

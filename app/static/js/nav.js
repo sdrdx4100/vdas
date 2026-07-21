@@ -14,10 +14,10 @@ $$(".nav-item[data-page]").forEach((btn) => {
     if (btn.dataset.page === "compare") autoSelectCmpDatasets();
     // 単一データセットのタブ: 未選択なら最初のデータセットを自動選択して即描画。
     // 選択済みでもスキーマ未読込 (別画面で値だけ変えた場合) なら読み込んで描画
-    if (["timeseries", "stats", "cluster"].includes(btn.dataset.page)) {
+    if (["timeseries", "stats", "cluster", "explore"].includes(btn.dataset.page)) {
       const page = btn.dataset.page;
-      const sel = { timeseries: "#ts-dataset", stats: "#st-dataset", cluster: "#cl-dataset" }[page];
-      const tab = { timeseries: state.ts, stats: state.st, cluster: state.cl }[page];
+      const sel = { timeseries: "#ts-dataset", stats: "#st-dataset", cluster: "#cl-dataset", explore: "#ex-dataset" }[page];
+      const tab = { timeseries: state.ts, stats: state.st, cluster: state.cl, explore: state.ex }[page];
       if (!$(sel).value && state.datasets.length) $(sel).value = state.datasets[0].id;
       if ($(sel).value && tab.schema?.dataset?.id !== $(sel).value) {
         $(sel).dispatchEvent(new Event("change"));

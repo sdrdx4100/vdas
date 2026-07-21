@@ -251,7 +251,8 @@ def _compare_tables(
 
 def compare_histogram(dataset_ids: list[str], column: str, bins: int = 40,
                       filters: list[dict[str, Any]] | None = None,
-                      minimum_datasets: int = 2) -> dict[str, Any]:
+                      minimum_datasets: int = 2,
+                      as_category: bool = False) -> dict[str, Any]:
     """複数データセットを共通のビン境界で集計し、分布を比較可能にする。
 
     データセットごとの行数差を吸収するため、割合 (%) も返す。
@@ -259,7 +260,7 @@ def compare_histogram(dataset_ids: list[str], column: str, bins: int = 40,
     bins = max(5, min(int(bins), 200))
     tables = _compare_tables(dataset_ids, column, minimum=minimum_datasets)
 
-    if any(cols[column]["kind"] != "numeric" for _, _, cols in tables):
+    if as_category or any(cols[column]["kind"] != "numeric" for _, _, cols in tables):
         # カテゴリ列: 全データセット合算の上位カテゴリを共通ラベルにする
         totals: dict[str, int] = {}
         per_ds: dict[str, dict[str, int]] = {}
@@ -274,6 +275,10 @@ def compare_histogram(dataset_ids: list[str], column: str, bins: int = 40,
                 for k, c in per_ds[ds_id].items():
                     totals[k] = totals.get(k, 0) + c
         labels = [k for k, _ in sorted(totals.items(), key=lambda x: -x[1])[:40]]
+        try:
+            labels.sort(key=lambda v: float(v))  # ギア段などの数値カテゴリは数値順に
+        except (TypeError, ValueError):
+            pass
         series = []
         for ds_id, _, _ in tables:
             counts = [per_ds[ds_id].get(label, 0) for label in labels]
@@ -535,6 +540,231 @@ def compare_diff(dataset_ids: list[str], baseline: str | None = None,
 
     signals.sort(key=lambda s: -(s["max_ks"] if s["max_ks"] is not None else -1))
     return {"baseline": baseline, "signals": signals, "truncated": truncated}
+
+
+# ---------- 自由分析 (万能チャート) ----------
+
+CHART_KINDS = {"scatter", "line", "bar", "box", "histogram", "heatmap"}
+AGG_FUNCS = {"avg": "avg", "sum": "sum", "count": "count", "min": "min",
+             "max": "max", "median": "median", "share": "count"}
+MAX_BAR_GROUPS = 40
+MAX_COLOR_GROUPS = 8
+
+
+def chart(dataset_id: str, kind: str, x: str | None = None, y: str | None = None,
+          color: str | None = None, agg: str = "avg", bins: int = 40,
+          filters: list[dict[str, Any]] | None = None,
+          max_points: int | None = None) -> dict[str, Any]:
+    """チャートビルダー用の汎用集計。kind に応じて必要なデータを返す。"""
+    if kind not in CHART_KINDS:
+        raise QueryError(f"未対応のチャート種別です: {kind}")
+    table, cols = _schema_map(dataset_id)
+    where, params = _build_where(filters, cols)
+    bins = max(5, min(int(bins), 200))
+
+    def need(col: str | None, label: str, numeric: bool = False):
+        if not col:
+            raise QueryError(f"{label} の列を選択してください")
+        _check_columns(cols, col)
+        if numeric and cols[col]["kind"] != "numeric":
+            raise QueryError(f"{label} には数値列を指定してください: {col}")
+
+    result: dict[str, Any]
+    if kind in ("scatter", "line"):
+        need(x, "X")
+        need(y, "Y", numeric=True)
+        if color:
+            need(color, "色分け")
+        select = [x, y] + ([color] if color and color not in (x, y) else [])
+        select_sql = ", ".join(_quote(c) for c in select)
+        limit = _clamp_points(max_points)
+        with db.duck() as con:
+            total = con.execute(f"SELECT count(*) FROM {_quote(table)}{where}", params).fetchone()[0]
+            stride = max(1, math.ceil(total / limit))
+            order = f"ORDER BY {_quote(x)}" if kind == "line" else "ORDER BY 1"
+            rows = con.execute(
+                f"SELECT {select_sql} FROM ("
+                f"  SELECT {select_sql}, row_number() OVER ({order}) AS __rn FROM {_quote(table)}{where}"
+                f") WHERE (__rn - 1) % {stride} = 0 ORDER BY __rn", params).fetchall()
+        data: dict[str, list[Any]] = {c: [] for c in select}
+        for row in rows:
+            for i, c in enumerate(select):
+                data[c].append(_jsonable(row[i]))
+        result = {"kind": kind, "data": data, "total_rows": total, "returned_rows": len(rows)}
+
+    elif kind == "bar":
+        need(x, "X")
+        if agg not in AGG_FUNCS:
+            raise QueryError(f"未対応の集計です: {agg}")
+        if agg not in ("count", "share"):
+            need(y, "Y", numeric=True)
+        expr = "count(*)" if agg in ("count", "share") else f"{AGG_FUNCS[agg]}({_quote(y)})"
+        gx = f"CAST({_quote(x)} AS VARCHAR)"
+        gc = f"CAST({_quote(color)} AS VARCHAR)" if color else "''"
+        if color:
+            need(color, "色分け")
+        with db.duck() as con:
+            rows = con.execute(
+                f"SELECT {gx}, {gc}, {expr}, count(*) FROM {_quote(table)}"
+                f"{where or ' WHERE 1=1'} AND {_quote(x)} IS NOT NULL GROUP BY 1, 2",
+                params).fetchall()
+        totals: dict[str, int] = {}
+        for g, _c, _v, n in rows:
+            totals[g] = totals.get(g, 0) + n
+        groups = sorted(totals, key=lambda k: -totals[k])[:MAX_BAR_GROUPS]
+        try:
+            groups.sort(key=float)
+        except (TypeError, ValueError):
+            groups.sort()
+        color_groups = sorted({c for _g, c, _v, _n in rows}) if color else [""]
+        color_groups = color_groups[:MAX_COLOR_GROUPS]
+        lookup = {(g, c): _jsonable(v) for g, c, v, _n in rows}
+        series = []
+        for c in color_groups:
+            values = [lookup.get((g, c)) for g in groups]
+            if agg == "share":
+                # 割合%: 色グループ内で正規化する (N数の違いを吸収して比較できる)
+                total = sum(v for _g, c2, v, _n in rows if c2 == c) or 1
+                values = [round(v * 100 / total, 3) if v is not None else None for v in values]
+            series.append({"label": c, "values": values})
+        result = {"kind": "bar", "groups": groups, "series": series, "agg": agg}
+
+    elif kind == "box":
+        need(x, "X (グループ)")
+        need(y, "Y", numeric=True)
+        if color:
+            need(color, "色分け")
+        q = _quote(y)
+        gx = f"CAST({_quote(x)} AS VARCHAR)"
+        gc = f"CAST({_quote(color)} AS VARCHAR)" if color else "''"
+        with db.duck() as con:
+            rows = con.execute(
+                f"SELECT {gx}, {gc}, count({q}), avg({q}), min({q}), max({q}), "
+                f"quantile_cont({q}, 0.25), quantile_cont({q}, 0.5), quantile_cont({q}, 0.75) "
+                f"FROM {_quote(table)}{where or ' WHERE 1=1'} "
+                f"AND {q} IS NOT NULL AND {_quote(x)} IS NOT NULL GROUP BY 1, 2",
+                params).fetchall()
+        if len(rows) > 400:
+            raise QueryError(f"グループが多すぎます ({len(rows)})。X には離散的な列を指定してください")
+        totals = {}
+        for r in rows:
+            totals[r[0]] = totals.get(r[0], 0) + r[2]
+        groups = sorted(totals, key=lambda k: -totals[k])[:MAX_BAR_GROUPS]
+        try:
+            groups.sort(key=float)
+        except (TypeError, ValueError):
+            groups.sort()
+        color_groups = sorted({r[1] for r in rows})[:MAX_COLOR_GROUPS] if color else [""]
+        stat = {}
+        for g, c, cnt, avg, mn, mx, q1, med, q3 in rows:
+            iqr = (q3 - q1) if q1 is not None and q3 is not None else 0
+            stat[(g, c)] = {
+                "count": cnt, "avg": _jsonable(avg), "q1": _jsonable(q1),
+                "median": _jsonable(med), "q3": _jsonable(q3),
+                "lowerfence": _jsonable(max(mn, q1 - 1.5 * iqr)) if q1 is not None else None,
+                "upperfence": _jsonable(min(mx, q3 + 1.5 * iqr)) if q3 is not None else None,
+            }
+        series = [{"label": c, "groups": [stat.get((g, c)) for g in groups]}
+                  for c in color_groups]
+        result = {"kind": "box", "groups": groups, "series": series}
+
+    elif kind == "histogram":
+        need(x, "X")
+        if color:
+            need(color, "色分け")
+        if cols[x]["kind"] != "numeric":
+            gx = f"CAST({_quote(x)} AS VARCHAR)"
+            gc = f"CAST({_quote(color)} AS VARCHAR)" if color else "''"
+            with db.duck() as con:
+                rows = con.execute(
+                    f"SELECT {gx}, {gc}, count(*) FROM {_quote(table)}{where} GROUP BY 1, 2",
+                    params).fetchall()
+            totals = {}
+            for g, _c, n in rows:
+                totals[g] = totals.get(g, 0) + n
+            labels = sorted(totals, key=lambda k: -totals[k])[:MAX_BAR_GROUPS]
+            color_groups = sorted({c for _g, c, _n in rows})[:MAX_COLOR_GROUPS] if color else [""]
+            lookup = {(g, c): n for g, c, n in rows}
+            series = []
+            for c in color_groups:
+                counts = [lookup.get((l, c), 0) for l in labels]
+                n = sum(lookup.get((l2, c), 0) for l2, c2 in lookup if c2 == c) or 1
+                series.append({"label": c, "counts": counts,
+                               "percents": [round(v * 100 / n, 3) for v in counts]})
+            result = {"kind": "histogram", "sub": "categorical", "labels": labels, "series": series}
+        else:
+            q = _quote(x)
+            gc = f"CAST({_quote(color)} AS VARCHAR)" if color else "''"
+            with db.duck() as con:
+                mn, mx = con.execute(
+                    f"SELECT min({q}), max({q}) FROM {_quote(table)}{where}", params).fetchone()
+                if mn is None:
+                    return {"kind": "histogram", "sub": "numeric", "edges": [], "series": []}
+                mn, mx = float(mn), float(mx)
+                if mn == mx:
+                    mx = mn + 1
+                width = (mx - mn) / bins
+                rows = con.execute(
+                    f"SELECT least(cast(floor(({q} - ?) / ?) as int), ?) AS b, {gc}, count(*) "
+                    f"FROM {_quote(table)}{where or ' WHERE 1=1'} AND {q} IS NOT NULL GROUP BY b, 2",
+                    [mn, width, bins - 1] + params).fetchall()
+            color_groups = sorted({c for _b, c, _n in rows})[:MAX_COLOR_GROUPS] if color else [""]
+            series = []
+            for c in color_groups:
+                counts = [0] * bins
+                for b, cg, n in rows:
+                    if cg == c and b is not None and 0 <= b < bins:
+                        counts[b] = n
+                total = sum(counts) or 1
+                series.append({"label": c, "counts": counts,
+                               "percents": [round(v * 100 / total, 3) for v in counts]})
+            result = {"kind": "histogram", "sub": "numeric",
+                      "edges": [mn + width * i for i in range(bins + 1)], "series": series}
+
+    else:  # heatmap (2次元密度)
+        need(x, "X", numeric=True)
+        need(y, "Y", numeric=True)
+        qx, qy = _quote(x), _quote(y)
+        with db.duck() as con:
+            mnx, mxx, mny, mxy = con.execute(
+                f"SELECT min({qx}), max({qx}), min({qy}), max({qy}) FROM {_quote(table)}{where}",
+                params).fetchone()
+            if mnx is None or mny is None:
+                return {"kind": "heatmap", "x_edges": [], "y_edges": [], "matrix": []}
+            mnx, mxx, mny, mxy = float(mnx), float(mxx), float(mny), float(mxy)
+            if mnx == mxx:
+                mxx = mnx + 1
+            if mny == mxy:
+                mxy = mny + 1
+            wx, wy = (mxx - mnx) / bins, (mxy - mny) / bins
+            rows = con.execute(
+                f"SELECT least(cast(floor(({qx} - ?) / ?) as int), ?), "
+                f"least(cast(floor(({qy} - ?) / ?) as int), ?), count(*) "
+                f"FROM {_quote(table)}{where or ' WHERE 1=1'} "
+                f"AND {qx} IS NOT NULL AND {qy} IS NOT NULL GROUP BY 1, 2",
+                [mnx, wx, bins - 1, mny, wy, bins - 1] + params).fetchall()
+        matrix = [[0] * bins for _ in range(bins)]
+        for bx, by, n in rows:
+            if bx is not None and by is not None and 0 <= bx < bins and 0 <= by < bins:
+                matrix[by][bx] = n
+        result = {"kind": "heatmap",
+                  "x_edges": [mnx + wx * i for i in range(bins + 1)],
+                  "y_edges": [mny + wy * i for i in range(bins + 1)],
+                  "matrix": matrix}
+
+    # Y (無ければ X) の基本統計をチップ表示用に添える
+    stats_col = y if (y and y in cols and cols[y]["kind"] == "numeric") else \
+        (x if (x and x in cols and cols[x]["kind"] == "numeric") else None)
+    if stats_col:
+        q = _quote(stats_col)
+        with db.duck() as con:
+            row = con.execute(
+                f"SELECT count({q}), avg({q}), stddev({q}), min({q}), max({q}), "
+                f"quantile_cont({q}, 0.5) FROM {_quote(table)}{where}", params).fetchone()
+        keys = ["count", "avg", "std", "min", "max", "median"]
+        result["stats"] = {"column": stats_col,
+                           **{k: _jsonable(v) for k, v in zip(keys, row)}}
+    return result
 
 
 def _jsonable(v: Any) -> Any:

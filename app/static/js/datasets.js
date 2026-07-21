@@ -16,6 +16,7 @@ export async function refreshDatasets() {
   fillDatasetSelect($("#ts-dataset"));
   fillDatasetSelect($("#st-dataset"));
   fillDatasetSelect($("#cl-dataset"));
+  fillDatasetSelect($("#ex-dataset"));
   document.dispatchEvent(new CustomEvent("datasets-refreshed"));
   renderCmpTagFilter();
   renderCmpDatasets();
@@ -186,7 +187,7 @@ export function tagChips(tags) {
 
 // データセットを指定タブで開く (選択→自動描画→タブ移動 まで1クリック)
 function openDatasetIn(dsId, page) {
-  const sel = { timeseries: "#ts-dataset", stats: "#st-dataset", cluster: "#cl-dataset" }[page];
+  const sel = { timeseries: "#ts-dataset", stats: "#st-dataset", cluster: "#cl-dataset", explore: "#ex-dataset" }[page];
   // 先に値を入れてからタブ移動する (ナビ側の自動選択と競合しないように)
   $(sel).value = dsId;
   gotoPage(page);

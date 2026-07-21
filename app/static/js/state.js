@@ -22,6 +22,7 @@ export const state = {
     cohortRunToken: 0,
   },  // 比較タブ
   cl: { schema: null, result: null },          // クラスタリングタブ
+  ex: { schema: null, filters: [], kind: "scatter" },  // 自由分析タブ
   labelsets: [],
   tags: [],
   dsSelection: new Set(),      // データ管理タブの一括操作用チェック

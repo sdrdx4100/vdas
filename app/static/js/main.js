@@ -4,6 +4,7 @@ import "./charts.js";
 import "./nav.js";
 import "./timeseries.js";
 import "./stats.js";
+import "./explore.js";
 import "./compare.js";
 import "./clustering.js";
 import "./workspace.js";

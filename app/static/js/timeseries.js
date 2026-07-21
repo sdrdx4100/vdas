@@ -27,22 +27,46 @@ $("#ts-dataset").addEventListener("change", async () => {
     const guess = cols.find((c) => c.kind === "temporal") ||
       cols.find((c) => /time|date|timestamp|時刻|時間/i.test(c.name)) || cols[0];
     if (guess) xSel.value = guess.name;
-    // 代表的な信号を自動選択して即描画 (速度・回転数らしい列 → 先頭の数値列)
-    const numeric = cols.filter((c) => c.kind === "numeric" && c.name !== xSel.value);
-    const picks = [];
-    for (const re of [/speed|km\/?h|車速/i, /rpm|回転/i]) {
-      const hit = numeric.find((c) => re.test(c.name) && !picks.includes(c.name));
-      if (hit) picks.push(hit.name);
+    // ラベルセット選択中ならそれを新しいデータセットにも適用し続ける
+    const ls = state.labelsets.find((l) => l.id === $("#ts-labelset").value);
+    if (ls && applyLabelset(ls, true)) {
+      plotTimeseries(true);
+    } else {
+      // 代表的な信号を自動選択して即描画 (速度・回転数らしい列 → 先頭の数値列)
+      const numeric = cols.filter((c) => c.kind === "numeric" && c.name !== xSel.value);
+      const picks = [];
+      for (const re of [/speed|km\/?h|車速/i, /rpm|回転/i]) {
+        const hit = numeric.find((c) => re.test(c.name) && !picks.includes(c.name));
+        if (hit) picks.push(hit.name);
+      }
+      for (const c of numeric) {
+        if (picks.length >= 2) break;
+        if (!picks.includes(c.name)) picks.push(c.name);
+      }
+      setTsSelectedColumns(picks);
+      plotTimeseries(true);
     }
-    for (const c of numeric) {
-      if (picks.length >= 2) break;
-      if (!picks.includes(c.name)) picks.push(c.name);
-    }
-    setTsSelectedColumns(picks);
-    plotTimeseries(true);
   }
   refreshLabelsetSelect();
 });
+
+// ラベルセットを現在のデータセットに適用する。信号が1つも無ければ false
+export function applyLabelset(ls, silent = false) {
+  const existing = new Set((state.ts.schema?.columns || []).map((c) => c.name));
+  const found = ls.columns.filter((c) => existing.has(c));
+  if (!found.length) {
+    if (!silent) toast(`「${ls.name}」の信号はこのデータセットに存在しません`, "error");
+    else $("#ts-labelset").value = "";
+    return false;
+  }
+  setTsSelectedColumns(found);
+  const missing = ls.columns.length - found.length;
+  if (!silent || missing) {
+    toast(`ラベルセット「${ls.name}」を適用しました` +
+      (missing ? ` (${missing} 信号はこのデータに無いためスキップ)` : ""));
+  }
+  return true;
+}
 
 // 信号チェック・X軸・点数の変更で自動再描画
 $("#ts-cols").addEventListener("change", tsAutoPlot);
@@ -256,17 +280,7 @@ $("#ts-labelset").addEventListener("change", () => {
   if (!ls) return;
   $("#ts-col-search").value = "";
   renderTsColumns();
-  // このデータセットに存在する信号だけ適用し、無いものは知らせる
-  const existing = new Set((state.ts.schema?.columns || []).map((c) => c.name));
-  const found = ls.columns.filter((c) => existing.has(c));
-  if (!found.length) {
-    return toast(`「${ls.name}」の信号はこのデータセットに存在しません`, "error");
-  }
-  setTsSelectedColumns(found);
-  const missing = ls.columns.length - found.length;
-  toast(`ラベルセット「${ls.name}」を適用しました` +
-    (missing ? ` (${missing} 信号はこのデータに無いためスキップ)` : ""));
-  plotTimeseries(true);
+  if (applyLabelset(ls)) plotTimeseries(true);
 });
 
 $("#ts-save-labelset").addEventListener("click", async () => {

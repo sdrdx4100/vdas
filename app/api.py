@@ -158,6 +158,23 @@ def post_scatter(dataset_id: str, req: ScatterRequest):
                  [f.model_dump() for f in req.filters], req.max_points)
 
 
+class ChartRequest(BaseModel):
+    kind: str
+    x: str | None = None
+    y: str | None = None
+    color: str | None = None
+    agg: str = "avg"
+    bins: int = 40
+    filters: list[FilterSpec] = []
+    max_points: int | None = None
+
+
+@router.post("/datasets/{dataset_id}/chart")
+def post_chart(dataset_id: str, req: ChartRequest):
+    return _wrap(queries.chart, dataset_id, req.kind, req.x, req.y, req.color,
+                 req.agg, req.bins, [f.model_dump() for f in req.filters], req.max_points)
+
+
 # ---------- クラスタリング ----------
 
 class ClusteringRequest(BaseModel):
@@ -178,12 +195,13 @@ class CompareHistogramRequest(BaseModel):
     column: str
     bins: int = 40
     filters: list[FilterSpec] = []
+    as_category: bool = False  # 数値列でも値をカテゴリ扱いして構成比 (割合%) を出す
 
 
 @router.post("/compare/histogram")
 def post_compare_histogram(req: CompareHistogramRequest):
     return _wrap(queries.compare_histogram, req.dataset_ids, req.column, req.bins,
-                 [f.model_dump() for f in req.filters])
+                 [f.model_dump() for f in req.filters], req.as_category)
 
 
 class CompareGroupStatsRequest(BaseModel):
@@ -265,6 +283,7 @@ class CohortHistogramRequest(CohortResolveRequest):
     column: str
     bins: int = 40
     filters: list[FilterSpec] = Field(default_factory=list)
+    as_category: bool = False
 
 
 class CohortDatasetSummaryRequest(CohortResolveRequest):
@@ -312,6 +331,7 @@ def post_cohort_histogram(req: CohortHistogramRequest):
         req.column,
         req.bins,
         [filter_spec.model_dump() for filter_spec in req.filters],
+        req.as_category,
     )
 
 
@@ -382,8 +402,8 @@ def list_views():
 
 @router.post("/views")
 def create_view(req: SavedViewCreate):
-    if req.kind not in ("timeseries", "stats", "compare"):
-        raise HTTPException(status_code=400, detail="kind は timeseries / stats / compare を指定してください")
+    if req.kind not in ("timeseries", "stats", "compare", "explore"):
+        raise HTTPException(status_code=400, detail="kind は timeseries / stats / compare / explore を指定してください")
     view_id = uuid.uuid4().hex[:12]
     db.meta_execute(
         "INSERT INTO saved_views (id, name, kind, dataset_id, config) VALUES (?, ?, ?, ?, ?)",

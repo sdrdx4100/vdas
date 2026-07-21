@@ -27,6 +27,10 @@
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="10" width="3" height="7" rx="0.5"/><rect x="8.5" y="5" width="3" height="12" rx="0.5"/><rect x="14" y="8" width="3" height="9" rx="0.5"/></svg>
     統計可視化
   </button>
+  <button class="nav-item" data-page="explore">
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="6" height="6" rx="1"/><rect x="11" y="3" width="6" height="6" rx="1"/><rect x="3" y="11" width="6" height="6" rx="1"/><path d="M14 11v6M11 14h6"/></svg>
+    グラフ作成
+  </button>
   <button class="nav-item" data-page="compare">
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="10" height="10" rx="1.5"/><path d="M7 17h9a1 1 0 0 0 1-1V7"/></svg>
     自由分析
@@ -232,6 +236,71 @@
     </div>
   </section>
 
+  <!-- ================== グラフ作成 (チャートビルダー) ================== -->
+  <section class="page" id="page-explore">
+    <div class="page-header">
+      <h1>グラフ作成</h1>
+      <p>1つのデータセットを対象に、グラフの種類と X・Y・色分け・条件を自由に組み合わせて分析します。変更すると即座に更新されます。例: ギアごとに色分けした散布図、モード別の箱ひげ図。</p>
+    </div>
+
+    <div class="card">
+      <div class="controls-row" style="margin-bottom:12px;">
+        <label class="field">データセット
+          <select id="ex-dataset" style="min-width:220px;"></select>
+        </label>
+        <button class="btn" id="ex-save-view">ビューを保存</button>
+      </div>
+
+      <h3>グラフの種類</h3>
+      <div class="chart-gallery" id="ex-kind">
+        <button class="chart-kind active" data-kind="scatter"><span class="ck-icon">⚬⚬</span>散布図</button>
+        <button class="chart-kind" data-kind="line"><span class="ck-icon">📈</span>折れ線</button>
+        <button class="chart-kind" data-kind="bar"><span class="ck-icon">📊</span>棒グラフ</button>
+        <button class="chart-kind" data-kind="box"><span class="ck-icon">🥡</span>箱ひげ</button>
+        <button class="chart-kind" data-kind="histogram"><span class="ck-icon">🏔️</span>ヒストグラム</button>
+        <button class="chart-kind" data-kind="heatmap"><span class="ck-icon">🟦</span>密度マップ</button>
+      </div>
+
+      <div class="controls-row" style="margin-top:14px;">
+        <label class="field" id="ex-x-wrap">X
+          <select id="ex-x" style="min-width:160px;"></select>
+        </label>
+        <label class="field" id="ex-y-wrap">Y
+          <select id="ex-y" style="min-width:160px;"></select>
+        </label>
+        <label class="field" id="ex-color-wrap">色分け
+          <select id="ex-color" style="min-width:150px;"><option value="">なし</option></select>
+        </label>
+        <label class="field" id="ex-agg-wrap">集計
+          <select id="ex-agg">
+            <option value="avg">平均</option>
+            <option value="share">割合% (構成比)</option>
+            <option value="median">中央値</option>
+            <option value="sum">合計</option>
+            <option value="count">件数</option>
+            <option value="min">最小</option>
+            <option value="max">最大</option>
+          </select>
+        </label>
+        <label class="field" id="ex-bins-wrap">ビン数
+          <input type="number" id="ex-bins" value="40" min="5" max="200" style="width:90px;">
+        </label>
+        <label class="field" id="ex-points-wrap">最大点数
+          <input type="number" id="ex-points" value="5000" min="100" max="50000" step="100" style="width:110px;">
+        </label>
+      </div>
+
+      <h3>フィルタ条件</h3>
+      <div id="ex-filters"></div>
+      <button class="btn subtle" id="ex-add-filter">＋ 条件を追加</button>
+    </div>
+
+    <div class="card">
+      <div id="ex-stats" style="margin-bottom:10px;"></div>
+      <div class="chart tall" id="ex-chart"></div>
+    </div>
+  </section>
+
   <!-- ================== 自由分析 (タグ集合比較) ================== -->
   <section class="page" id="page-compare">
     <div class="page-header">
@@ -361,7 +430,20 @@
         <p class="hint">例: 秒単位の時間列＋3600で1時間あたり、km単位の距離列＋100で100kmあたり。</p>
         <div class="chart" id="cmp-transition-chart"></div>
       </div>
+
+    <div class="card">
+      <h2>構成比比較 (割合 %)</h2>
+      <p style="margin:0 0 10px; color:var(--text-secondary); font-size:12px;">
+        ギア段・走行モードなどの<strong>使用割合</strong>を比較します。各対象内の割合 (%) に正規化するため、N数 (走行量) が違っても公平に比較できます。</p>
+      <div class="controls-row" style="margin-bottom:10px;">
+        <label class="field">構成比を見る列
+          <select id="cmp-share-col" style="min-width:180px;"></select>
+        </label>
+      </div>
+      <div class="chart" id="cmp-share-chart"></div>
     </div>
+    </div>
+
 
     <div class="card cmp-dataset-only">
       <h2>彼我差分サマリ (共通信号の自動スキャン)</h2>

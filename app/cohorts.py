@@ -82,12 +82,13 @@ def compare_histogram(
     column: str,
     bins: int = 40,
     filters: list[dict[str, Any]] | None = None,
+    as_category: bool = False,
 ) -> dict[str, Any]:
     """グループごとの共通ビン分布を、プール値とデータセット均等重みで返す。"""
     resolution = resolve_cohorts(specs)
     dataset_ids = _unique_dataset_ids(resolution["cohorts"])
     base = queries.compare_histogram(
-        dataset_ids, column, bins, filters, minimum_datasets=1
+        dataset_ids, column, bins, filters, minimum_datasets=1, as_category=as_category
     )
     by_dataset = {series["dataset_id"]: series for series in base["series"]}
 

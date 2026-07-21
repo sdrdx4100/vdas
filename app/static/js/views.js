@@ -33,7 +33,7 @@ export async function refreshViewsPage() {
   const vBody = $("#views-table tbody");
   vBody.innerHTML = "";
   $("#views-empty").style.display = views.length ? "none" : "";
-  const kindLabel = { timeseries: "時系列", stats: "統計", compare: "比較" };
+  const kindLabel = { timeseries: "時系列", stats: "統計", compare: "比較", explore: "自由分析" };
   for (const v of views) {
     const isCohortView = v.kind === "compare" && v.config.mode === "cohorts";
     const dsIds = v.kind === "compare" ? (v.config.dataset_ids || []) : [v.dataset_id];
@@ -84,6 +84,35 @@ export async function refreshViewsPage() {
 }
 
 async function loadView(v) {
+  if (v.kind === "explore") {
+    const { EX_VISIBILITY, exUpdateControls, plotExplore } = await import("./explore.js");
+    const c = v.config || {};
+    $("#ex-dataset").value = v.dataset_id || "";
+    state.ex.schema = null;
+    gotoPage("explore");
+    await waitFor(() => state.ex.schema);
+    if (c.chart_kind && EX_VISIBILITY[c.chart_kind]) {
+      state.ex.kind = c.chart_kind;
+      $$("#ex-kind .chart-kind").forEach((b) =>
+        b.classList.toggle("active", b.dataset.kind === c.chart_kind));
+    }
+    state.ex.filters = (c.filters || []).map((f) => ({ ...f }));
+    renderFilters("#ex-filters", state.ex);
+    exUpdateControls();
+    const setIf = (sel, val) => {
+      if (val && [...$(sel).options].some((o) => o.value === val)) $(sel).value = val;
+    };
+    setIf("#ex-x", c.x);
+    setIf("#ex-y", c.y);
+    setIf("#ex-color", c.color);
+    if (c.agg) $("#ex-agg").value = c.agg;
+    if (c.bins) $("#ex-bins").value = c.bins;
+    if (c.max_points) $("#ex-points").value = c.max_points;
+    exUpdateControls();
+    plotExplore(true);
+    toast(`ビュー「${v.name}」を読み込みました`);
+    return;
+  }
   const c = v.config || {};
   if (v.kind === "compare") {
     gotoPage("compare");

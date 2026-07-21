@@ -268,6 +268,16 @@ export async function updateCmpColumns(idsOverride = null) {
     if (guess) cohortY.value = guess.name;
   }
 
+  const shareSel = $("#cmp-share-col");
+  const prevShare = shareSel.value;
+  shareSel.innerHTML = common
+    .filter((c) => c.kind !== "temporal")
+    .map((c) => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join("");
+  if (!keep(shareSel, prevShare)) {
+    const guess = common.find((c) => /gear|ギア|mode|モード|cluster|状態/i.test(c.name));
+    if (guess) shareSel.value = guess.name;
+  }
+
   transitionState.innerHTML = common
     .filter((c) => c.kind !== "temporal")
     .map((c) => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join("");
@@ -385,6 +395,7 @@ $("#cmp-plot").addEventListener("click", () => runCompare());
   $(sel).addEventListener("change", cmpAutoRun));
 $("#cmp-curve-x").addEventListener("change", () => plotCmpCurve().catch(() => {}));
 $("#cmp-curve-y").addEventListener("change", () => plotCmpCurve().catch(() => {}));
+$("#cmp-share-col").addEventListener("change", cmpAutoRun);
 ["#cmp-cohort-normalization", "#cmp-cohort-statistic", "#cmp-multi-view",
   "#cmp-cohort-x", "#cmp-cohort-y",
   "#cmp-transition-state", "#cmp-transition-order", "#cmp-transition-denominator",
@@ -423,10 +434,11 @@ export async function runCompare(auto = false) {
   try {
     await renderDiffTable(ctx);
     await renderSignalCharts(ctx);
+    await renderShareChart(ctx);
     await plotCmpCurve();
     // レイアウト確定後にチャートをコンテナ幅へ合わせ直す
     requestAnimationFrame(() => {
-      ["cmp-hist-chart", "cmp-cdf-chart", "cmp-group-chart", "cmp-curve-chart"].forEach((id) => {
+      ["cmp-hist-chart", "cmp-cdf-chart", "cmp-group-chart", "cmp-curve-chart", "cmp-share-chart"].forEach((id) => {
         const el = document.getElementById(id);
         if (el && el.data) Plotly.Plots.resize(el);
       });
@@ -434,6 +446,52 @@ export async function runCompare(auto = false) {
   } catch (e) {
     toast(`エラー: ${e.message}`, "error");
   }
+}
+
+// --- 構成比比較 (割合%): ギア段・モードなどの使用割合を N 数に依存せず比較 ---
+function renderShareBars(labels, series, title) {
+  renderChart("cmp-share-chart", () => {
+    const colors = seriesColors();
+    const traces = series.map((s, i) => ({
+      type: "bar", x: labels, y: s.percents, name: s.name,
+      marker: { color: colors[i % colors.length] },
+      hovertemplate: `${esc(title)}=%{x}<br>%{y:.2f}%<extra>%{fullData.name}</extra>`,
+    }));
+    Plotly.react("cmp-share-chart", traces, baseLayout({
+      barmode: "group", bargap: 0.15,
+      xaxis: Object.assign(baseLayout().xaxis, { title: { text: title }, type: "category" }),
+      yaxis: Object.assign(baseLayout().yaxis, { title: { text: "割合 (%)" } }),
+      showlegend: true,
+    }), PLOT_CONFIG);
+  });
+}
+
+async function renderShareChart(ctx) {
+  const column = $("#cmp-share-col").value;
+  if (!column) return;
+  const res = await api("/api/compare/histogram", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ dataset_ids: ctx.ids, column, as_category: true,
+      filters: ctx.filters }),
+  });
+  renderShareBars(res.labels,
+    res.series.map((s) => ({ name: cmpDsName(s.dataset_id), percents: s.percents })),
+    column);
+}
+
+async function renderCohortShareChart(filters, normalization, runToken) {
+  const column = $("#cmp-share-col").value;
+  if (!column) return;
+  const res = await cohortPost("/api/compare/cohorts/histogram",
+    { column, as_category: true, filters });
+  if (runToken !== state.cmp.cohortRunToken) return;
+  renderShareBars(res.labels,
+    res.cohorts.map((c) => ({
+      name: c.name,
+      percents: normalization === "pooled_percents" ? c.pooled_percents : c.mean_dataset_percents,
+    })),
+    column);
 }
 
 function cohortPost(path, body) {
@@ -489,11 +547,12 @@ async function runCohortCompare(auto = false) {
       chartRegistry.delete("cmp-cohort-2d-chart");
       Plotly.purge("cmp-cohort-2d-chart");
     }
+    await renderCohortShareChart(filters, normalization, runToken);
     await renderCohortTransitions(filters, normalization, runToken);
     if (runToken !== state.cmp.cohortRunToken) return;
     requestAnimationFrame(() => {
       ["cmp-cohort-hist-chart", "cmp-cohort-stat-chart", "cmp-multi-chart", "cmp-cohort-2d-chart",
-        "cmp-transition-chart"].forEach((id) => {
+        "cmp-transition-chart", "cmp-share-chart"].forEach((id) => {
         const element = document.getElementById(id);
         if (element?.data) Plotly.Plots.resize(element);
       });

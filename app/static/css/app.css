@@ -78,6 +78,9 @@
 
 * { box-sizing: border-box; }
 
+/* display 指定を持つ要素でも hidden 属性を必ず効かせる */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   height: 100%;

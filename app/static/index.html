@@ -265,12 +265,8 @@
         <label class="field">分析する信号
           <select id="cmp-signal" style="min-width:200px;"></select>
         </label>
-        <label class="field cmp-dataset-only">グループ列 (ギア段・モードなど)
-          <select id="cmp-groupby" style="min-width:180px;"><option value="">なし (全体のみ)</option></select>
-        </label>
-        <label class="field cmp-dataset-only">基準 (自社) データセット
-          <select id="cmp-baseline" style="min-width:180px;"></select>
-        </label>
+        <select id="cmp-groupby" hidden><option value="">なし (全体のみ)</option></select>
+        <select id="cmp-baseline" hidden></select>
         <button class="btn" id="cmp-plot" title="手動で再比較">🔄 更新</button>
         <button class="btn" id="cmp-save-view">ビューを保存</button>
       </div>
@@ -303,7 +299,15 @@
             <h2>複数信号を並べて比較</h2>
             <p class="hint">信号ごとに独立したY軸で、各ログの代表値とグループ内のばらつきを並べます。</p>
           </div>
-          <span class="selection-summary" id="cmp-multi-summary">0 信号選択中</span>
+          <div class="controls-row compact">
+            <label class="field">表示
+              <select id="cmp-multi-view">
+                <option value="distribution">箱ひげ＋全ログ</option>
+                <option value="mean_ci">グループ平均＋95%区間（近似）</option>
+              </select>
+            </label>
+            <span class="selection-summary" id="cmp-multi-summary">0 信号選択中</span>
+          </div>
         </div>
         <div class="controls-row" style="margin-bottom:8px;">
           <input type="search" id="cmp-multi-search" placeholder="信号名で絞り込み…" style="flex:1; max-width:320px;">

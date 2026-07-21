@@ -22,6 +22,7 @@ def test_comparison_workspace_and_modules_are_served() -> None:
             "cmp-cohort-stat-chart",
             "cmp-multi-signals",
             "cmp-multi-chart",
+            "cmp-multi-view",
             "cmp-add-cohort",
             "cmp-cohort-builders",
             "cmp-transition-chart",
@@ -33,6 +34,7 @@ def test_comparison_workspace_and_modules_are_served() -> None:
         assert 'data-cmp-mode="datasets"' not in html
         assert "A集合のみ" not in html
         assert "B集合のみ" not in html
+        assert "基準 (自社) データセット" not in html
         assert '<div id="cmp-cohort-selector">' in html
         assert "個別ファイルではなく、タグ条件に一致するすべてのデータセット" in html
 

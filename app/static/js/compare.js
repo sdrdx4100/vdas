@@ -385,7 +385,8 @@ $("#cmp-plot").addEventListener("click", () => runCompare());
   $(sel).addEventListener("change", cmpAutoRun));
 $("#cmp-curve-x").addEventListener("change", () => plotCmpCurve().catch(() => {}));
 $("#cmp-curve-y").addEventListener("change", () => plotCmpCurve().catch(() => {}));
-["#cmp-cohort-normalization", "#cmp-cohort-statistic", "#cmp-cohort-x", "#cmp-cohort-y",
+["#cmp-cohort-normalization", "#cmp-cohort-statistic", "#cmp-multi-view",
+  "#cmp-cohort-x", "#cmp-cohort-y",
   "#cmp-transition-state", "#cmp-transition-order", "#cmp-transition-denominator",
   "#cmp-transition-scale"].forEach((selector) =>
   $(selector).addEventListener("change", cmpAutoRun));
@@ -509,12 +510,13 @@ function renderCohortMultiSummary(result) {
   const columns = signalCount === 1 ? 1 : 2;
   const rows = Math.ceil(signalCount / columns);
   const colors = seriesColors();
+  const view = $("#cmp-multi-view").value;
   const traces = [];
   const layout = baseLayout({
     height: Math.max(480, rows * 280 + 80),
     margin: { l: 72, r: 28, t: 42, b: 54 },
     grid: { rows, columns, pattern: "independent", xgap: 0.12, ygap: 0.16 },
-    boxmode: "group",
+    boxmode: "group", barmode: "group",
     showlegend: true,
   });
   result.results.forEach((signal, signalIndex) => {
@@ -528,18 +530,35 @@ function renderCohortMultiSummary(result) {
       gridcolor: cssVar("--chart-grid"), zerolinecolor: cssVar("--chart-axis"),
     };
     signal.cohorts.forEach((cohort, cohortIndex) => {
-      traces.push({
-        type: "box", name: cohort.name,
-        x: cohort.values.map(() => cohort.name), y: cohort.values,
-        xaxis: `x${suffix}`, yaxis: `y${suffix}`,
-        legendgroup: cohort.name, showlegend: signalIndex === 0,
-        boxpoints: "all", jitter: 0.25, pointpos: 0,
-        marker: { color: colors[cohortIndex % colors.length], size: 6, opacity: 0.72 },
-        line: { color: colors[cohortIndex % colors.length] },
-        customdata: cohort.datasets.filter((dataset) => dataset.value != null)
-          .map((dataset) => dataset.dataset_name),
-        hovertemplate: "%{customdata}<br>代表値=%{y}<extra>%{fullData.name}</extra>",
-      });
+      const color = colors[cohortIndex % colors.length];
+      if (view === "mean_ci") {
+        const summary = cohort.summary;
+        const error = summary.n >= 2 && summary.std != null
+          ? 1.96 * summary.std / Math.sqrt(summary.n)
+          : null;
+        traces.push({
+          type: "bar", name: cohort.name, x: [cohort.name], y: [summary.mean],
+          xaxis: `x${suffix}`, yaxis: `y${suffix}`,
+          legendgroup: cohort.name, showlegend: signalIndex === 0,
+          marker: { color, opacity: 0.8 },
+          error_y: { type: "data", array: [error], visible: error != null, thickness: 1.5 },
+          customdata: [[summary.n, summary.std]],
+          hovertemplate: "平均=%{y}<br>n=%{customdata[0]}<br>標準偏差=%{customdata[1]}<extra>%{fullData.name}</extra>",
+        });
+      } else {
+        traces.push({
+          type: "box", name: cohort.name,
+          x: cohort.values.map(() => cohort.name), y: cohort.values,
+          xaxis: `x${suffix}`, yaxis: `y${suffix}`,
+          legendgroup: cohort.name, showlegend: signalIndex === 0,
+          boxpoints: "all", jitter: 0.25, pointpos: 0,
+          marker: { color, size: 6, opacity: 0.72 },
+          line: { color },
+          customdata: cohort.datasets.filter((dataset) => dataset.value != null)
+            .map((dataset) => dataset.dataset_name),
+          hovertemplate: "%{customdata}<br>代表値=%{y}<extra>%{fullData.name}</extra>",
+        });
+      }
     });
   });
   renderChart("cmp-multi-chart", () => Plotly.react(
@@ -1007,6 +1026,7 @@ $("#cmp-save-view").addEventListener("click", async () => {
     mode: "cohorts",
     cohorts: cohortPayload(),
     multi_signals: selectedCmpMultiSignals(),
+    multi_view: $("#cmp-multi-view").value,
     normalization: $("#cmp-cohort-normalization").value,
     statistic: $("#cmp-cohort-statistic").value,
     cohort_x: $("#cmp-cohort-x").value || null,
@@ -1016,6 +1036,13 @@ $("#cmp-save-view").addEventListener("click", async () => {
     transition_denominator: $("#cmp-transition-denominator").value || null,
     transition_scale: Number($("#cmp-transition-scale").value) || 1,
   } : { mode: "datasets" };
+  const datasetConfig = state.cmp.mode === "datasets" ? {
+    dataset_ids: ids,
+    group_by: $("#cmp-groupby").value || null,
+    baseline: $("#cmp-baseline").value || null,
+    curve_x: $("#cmp-curve-x").value || null,
+    curve_y: $("#cmp-curve-y").value || null,
+  } : {};
   await api("/api/views", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1023,13 +1050,9 @@ $("#cmp-save-view").addEventListener("click", async () => {
       name, kind: "compare", dataset_id: null,
       config: {
         ...cohortConfig,
-        dataset_ids: ids,
+        ...datasetConfig,
         signal: $("#cmp-signal").value,
-        group_by: $("#cmp-groupby").value || null,
-        baseline: $("#cmp-baseline").value || null,
         filters: activeFilters(state.cmp),
-        curve_x: $("#cmp-curve-x").value || null,
-        curve_y: $("#cmp-curve-y").value || null,
       },
     }),
   });

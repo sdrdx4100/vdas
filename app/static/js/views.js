@@ -114,6 +114,7 @@ async function loadView(v) {
       if (c.normalization) $("#cmp-cohort-normalization").value = c.normalization;
       if (c.statistic) $("#cmp-cohort-statistic").value = c.statistic;
       if (c.multi_signals) setCmpMultiSignals(c.multi_signals);
+      if (c.multi_view) $("#cmp-multi-view").value = c.multi_view;
       if (c.transition_scale) $("#cmp-transition-scale").value = c.transition_scale;
       runCompare();
       toast(`ビュー「${v.name}」を読み込みました`);

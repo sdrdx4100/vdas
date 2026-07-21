@@ -267,6 +267,12 @@ class CohortHistogramRequest(CohortResolveRequest):
     filters: list[FilterSpec] = Field(default_factory=list)
 
 
+class CohortDatasetSummaryRequest(CohortResolveRequest):
+    column: str
+    metric: Literal["avg", "q50", "q75"] = "avg"
+    filters: list[FilterSpec] = Field(default_factory=list)
+
+
 class CohortHistogram2DRequest(CohortResolveRequest):
     x: str
     y: str
@@ -299,6 +305,17 @@ def post_cohort_histogram(req: CohortHistogramRequest):
         _cohort_dicts(req),
         req.column,
         req.bins,
+        [filter_spec.model_dump() for filter_spec in req.filters],
+    )
+
+
+@router.post("/compare/cohorts/summary")
+def post_cohort_dataset_summary(req: CohortDatasetSummaryRequest):
+    return _wrap(
+        cohorts.compare_dataset_summary,
+        _cohort_dicts(req),
+        req.column,
+        req.metric,
         [filter_spec.model_dump() for filter_spec in req.filters],
     )
 

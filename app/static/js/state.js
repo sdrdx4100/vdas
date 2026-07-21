@@ -2,6 +2,7 @@
 
 export const state = {
   datasets: [],
+  activeDatasetId: null,              // 単一データセット分析タブで共有する分析対象
   ts: { schema: null, filters: [] },   // 時系列タブ
   st: { schema: null, filters: [] },   // 統計タブ
   cmp: {

@@ -6,6 +6,7 @@ import "./timeseries.js";
 import "./stats.js";
 import "./compare.js";
 import "./clustering.js";
+import "./workspace.js";
 import { refreshDatasets } from "./datasets.js";
 import { refreshLabelsets } from "./views.js";
 import { toast } from "./api.js";

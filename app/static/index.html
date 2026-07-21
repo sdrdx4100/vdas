@@ -112,6 +112,7 @@
     <div class="page-header">
       <h1>時系列可視化</h1>
       <p>データセットを選ぶと代表信号が自動でプロットされます。信号・条件を変えると即座に更新。大量データは自動で間引かれます。</p>
+      <div class="analysis-context" data-analysis-context="timeseries"></div>
     </div>
 
     <div class="card">
@@ -138,6 +139,9 @@
       <h3>表示する信号 (Y軸)</h3>
       <div class="controls-row" style="margin-bottom:8px;">
         <input type="search" id="ts-col-search" placeholder="信号名で絞り込み…" style="flex:1; max-width:320px;">
+        <span id="ts-selection-summary" class="selection-summary" aria-live="polite">0 信号選択中</span>
+        <button class="btn subtle" id="ts-select-visible" type="button">表示中を全選択</button>
+        <button class="btn subtle" id="ts-clear-selection" type="button">選択解除</button>
         <label class="field">ラベルセット
           <select id="ts-labelset" style="min-width:180px;"><option value="">— 選択 —</option></select>
         </label>
@@ -161,6 +165,7 @@
     <div class="page-header">
       <h1>全体統計可視化</h1>
       <p>データセットを選ぶと統計量・分布・散布図・相関が自動で計算されます。</p>
+      <div class="analysis-context" data-analysis-context="stats"></div>
     </div>
 
     <div class="card">
@@ -307,6 +312,24 @@
         <div id="cmp-cohort-summary" class="cohort-summary"></div>
       </div>
 
+      <div class="card">
+        <div class="cohort-result-header">
+          <div>
+            <h2>データセット単位の集合統計</h2>
+            <p class="hint">各ログの代表値を1標本として比較します。行数の多いログだけが結果を支配しません。</p>
+          </div>
+          <label class="field">各ログの代表値
+            <select id="cmp-cohort-statistic">
+              <option value="avg">平均</option>
+              <option value="q50">中央値</option>
+              <option value="q75">上位四分位 (Q75)</option>
+            </select>
+          </label>
+        </div>
+        <div id="cmp-cohort-stat-summary" class="cohort-summary"></div>
+        <div class="chart" id="cmp-cohort-stat-chart"></div>
+      </div>
+
       <div class="grid-2">
         <div class="card">
           <h2>信号分布</h2>
@@ -394,6 +417,7 @@
     <div class="page-header">
       <h1>クラスタリング (走行状態の自動ラベリング)</h1>
       <p>選択した信号を K-means でクラスタリングし、結果をデータセットに列として書き戻します。書き戻した列はフィルタ・散布図の色分け・分布比較でそのまま使えます。</p>
+      <div class="analysis-context" data-analysis-context="cluster"></div>
     </div>
 
     <div class="card">

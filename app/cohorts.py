@@ -3,9 +3,12 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
+
 from . import db, ingest, queries
 
 MAX_2D_BINS = 100
+COHORT_METRICS = {"avg", "q50", "q75"}
 
 
 def resolve_cohorts(specs: list[dict[str, Any]]) -> dict[str, Any]:
@@ -113,6 +116,72 @@ def compare_histogram(
     else:
         result["labels"] = base["labels"]
     return result
+
+
+def compare_dataset_summary(
+    specs: list[dict[str, Any]],
+    column: str,
+    metric: str = "avg",
+    filters: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """各データセットの代表値を1標本として、コホート間の差を要約する。"""
+    if metric not in COHORT_METRICS:
+        raise queries.QueryError("代表値は avg / q50 / q75 を指定してください")
+
+    resolution = resolve_cohorts(specs)
+    dataset_ids = _unique_dataset_ids(resolution["cohorts"])
+    base = queries.compare_summary(dataset_ids, column, filters)
+    by_dataset = {series["dataset_id"]: series for series in base["series"]}
+    dataset_names = {
+        dataset["id"]: dataset["name"]
+        for cohort in resolution["cohorts"]
+        for dataset in cohort["datasets"]
+    }
+
+    cohort_series = []
+    for cohort in resolution["cohorts"]:
+        datasets = []
+        values = []
+        for dataset_id in cohort["dataset_ids"]:
+            summary = by_dataset[dataset_id]
+            value = summary.get(metric)
+            datasets.append(
+                {
+                    "dataset_id": dataset_id,
+                    "dataset_name": dataset_names[dataset_id],
+                    "value": value,
+                    "count": summary["count"],
+                }
+            )
+            if value is not None:
+                values.append(float(value))
+        cohort_series.append(
+            {
+                **_cohort_summary(cohort),
+                "datasets": datasets,
+                "values": values,
+                "summary": _describe_dataset_values(values),
+            }
+        )
+
+    comparison = None
+    if len(cohort_series) >= 2:
+        comparison = _compare_dataset_values(
+            cohort_series[0]["values"], cohort_series[1]["values"]
+        )
+        comparison.update(
+            {
+                "baseline": cohort_series[0]["name"],
+                "comparison": cohort_series[1]["name"],
+            }
+        )
+    return {
+        "column": column,
+        "metric": metric,
+        "cohorts": cohort_series,
+        "comparison": comparison,
+        "overlaps": resolution["overlaps"],
+    }
 
 
 def compare_histogram2d(
@@ -399,3 +468,71 @@ def _mean_matrices(matrices: list[list[list[float]]]) -> list[list[float]]:
         ]
         for row in range(len(matrices[0]))
     ]
+
+
+def _describe_dataset_values(values: list[float]) -> dict[str, float | int | None]:
+    if not values:
+        return {"n": 0, "mean": None, "std": None, "min": None, "q25": None,
+                "median": None, "q75": None, "max": None}
+    array = np.asarray(values, dtype=float)
+    return {
+        "n": len(values),
+        "mean": float(np.mean(array)),
+        "std": float(np.std(array, ddof=1)) if len(values) >= 2 else None,
+        "min": float(np.min(array)),
+        "q25": float(np.quantile(array, 0.25)),
+        "median": float(np.median(array)),
+        "q75": float(np.quantile(array, 0.75)),
+        "max": float(np.max(array)),
+    }
+
+
+def _compare_dataset_values(left: list[float], right: list[float]) -> dict[str, Any]:
+    if not left or not right:
+        return {
+            "difference": None, "difference_percent": None, "ci95": None,
+            "hedges_g": None, "cliffs_delta": None,
+        }
+    left_array = np.asarray(left, dtype=float)
+    right_array = np.asarray(right, dtype=float)
+    left_mean = float(np.mean(left_array))
+    right_mean = float(np.mean(right_array))
+    difference = right_mean - left_mean
+
+    ci95 = None
+    if len(left) >= 2 and len(right) >= 2:
+        # データセットを再標本化するため、行数ではなくログ本数の不確実性を表す。
+        rng = np.random.default_rng(20260721)
+        iterations = 2000
+        left_boot = rng.choice(
+            left_array, size=(iterations, len(left_array)), replace=True
+        ).mean(axis=1)
+        right_boot = rng.choice(
+            right_array, size=(iterations, len(right_array)), replace=True
+        ).mean(axis=1)
+        low, high = np.quantile(right_boot - left_boot, [0.025, 0.975])
+        ci95 = [float(low), float(high)]
+
+    hedges_g = None
+    if len(left) >= 2 and len(right) >= 2:
+        degrees = len(left) + len(right) - 2
+        pooled_variance = (
+            (len(left) - 1) * np.var(left_array, ddof=1)
+            + (len(right) - 1) * np.var(right_array, ddof=1)
+        ) / degrees
+        if pooled_variance > 0:
+            correction = 1 - 3 / (4 * degrees - 1) if degrees > 1 else 1
+            hedges_g = float(correction * difference / np.sqrt(pooled_variance))
+
+    pair_differences = right_array[:, None] - left_array[None, :]
+    cliffs_delta = float(
+        (np.count_nonzero(pair_differences > 0) - np.count_nonzero(pair_differences < 0))
+        / pair_differences.size
+    )
+    return {
+        "difference": difference,
+        "difference_percent": difference * 100 / abs(left_mean) if left_mean else None,
+        "ci95": ci95,
+        "hedges_g": hedges_g,
+        "cliffs_delta": cliffs_delta,
+    }

@@ -2,16 +2,21 @@
 import { $, $$, api, toast, debounce, fmtNum, esc } from "./api.js";
 import { state } from "./state.js";
 import { loadSchema, columnOptions, renderFilters, activeFilters } from "./filters.js";
-import { seriesColors, baseLayout, PLOT_CONFIG, renderChart } from "./charts.js";
+import { seriesColors, baseLayout, PLOT_CONFIG, renderChart, chartRegistry } from "./charts.js";
 import { openNameDialog } from "./modals.js";
 import { refreshLabelsets, refreshLabelsetSelect } from "./views.js";
 
 const tsAutoPlot = debounce(() => plotTimeseries(true), 500);
 state.ts.onChange = tsAutoPlot;
+let selectedColumns = new Set();
+let tsRequestId = 0;
 
 $("#ts-dataset").addEventListener("change", async () => {
+  tsRequestId += 1; // 切替前のデータセットに対する応答を無効化
+  setTsLoading(false);
   state.ts.schema = await loadSchema($("#ts-dataset").value);
   state.ts.filters = [];
+  selectedColumns = new Set();
   renderFilters("#ts-filters", state.ts);
   renderTsColumns();
   const xSel = $("#ts-x");
@@ -54,24 +59,57 @@ function renderTsColumns() {
     if (q && !c.name.toLowerCase().includes(q)) continue;
     const label = document.createElement("label");
     label.innerHTML = `<input type="checkbox" value="${esc(c.name)}"><span>${esc(c.name)}</span><span class="col-type">${esc(c.type)}</span>`;
+    label.querySelector("input").checked = selectedColumns.has(c.name);
     wrap.appendChild(label);
   }
+  updateSelectionSummary();
 }
 
 $("#ts-col-search").addEventListener("input", () => {
-  // 検索で再描画する前に現在のチェック状態を保持
-  const checked = tsSelectedColumns();
   renderTsColumns();
-  setTsSelectedColumns(checked);
 });
 
 function tsSelectedColumns() {
-  return $$("#ts-cols input:checked").map((el) => el.value);
+  // スキーマ順を保つと、検索や再描画を挟んでも凡例の並びが変わらない。
+  return (state.ts.schema?.columns || [])
+    .map((column) => column.name)
+    .filter((name) => selectedColumns.has(name));
 }
 
 export function setTsSelectedColumns(cols) {
-  $$("#ts-cols input").forEach((el) => { el.checked = cols.includes(el.value); });
+  selectedColumns = new Set(cols);
+  $$("#ts-cols input").forEach((el) => { el.checked = selectedColumns.has(el.value); });
+  updateSelectionSummary();
 }
+
+function updateSelectionSummary() {
+  const summary = $("#ts-selection-summary");
+  if (!summary) return;
+  const visible = $$("#ts-cols input").length;
+  summary.textContent = `${selectedColumns.size} 信号選択中${visible ? ` / ${visible} 件表示` : ""}`;
+}
+
+$("#ts-cols").addEventListener("change", (event) => {
+  const input = event.target.closest('input[type="checkbox"]');
+  if (!input) return;
+  input.checked ? selectedColumns.add(input.value) : selectedColumns.delete(input.value);
+  updateSelectionSummary();
+});
+
+$("#ts-select-visible").addEventListener("click", () => {
+  $$("#ts-cols input").forEach((input) => selectedColumns.add(input.value));
+  setTsSelectedColumns([...selectedColumns]);
+  plotTimeseries(true);
+});
+
+$("#ts-clear-selection").addEventListener("click", () => {
+  tsRequestId += 1;
+  setTsLoading(false);
+  setTsSelectedColumns([]);
+  chartRegistry.delete("ts-chart");
+  Plotly.purge("ts-chart");
+  $("#ts-meta").innerHTML = '<span class="chip">信号を選択するとグラフを表示します</span>';
+});
 
 $("#ts-add-filter").addEventListener("click", () => {
   if (!state.ts.schema) return toast("先にデータセットを選択してください", "error");
@@ -90,6 +128,8 @@ export async function plotTimeseries(auto = false) {
   if (!x) return auto || toast("X軸を選択してください", "error");
   if (!ys.length) return auto || toast("表示する信号を1つ以上選択してください", "error");
 
+  const requestId = ++tsRequestId;
+  setTsLoading(true);
   try {
     const res = await api(`/api/datasets/${dsId}/timeseries`, {
       method: "POST",
@@ -100,6 +140,8 @@ export async function plotTimeseries(auto = false) {
         max_points: +$("#ts-maxpoints").value || 5000,
       }),
     });
+    // 自動更新が連続した場合、遅れて返った古い結果では上書きしない。
+    if (requestId !== tsRequestId) return;
     $("#ts-meta").innerHTML =
       `<span class="chip accent">${fmtNum(res.returned_rows)} 点表示</span> ` +
       `<span class="chip">全 ${fmtNum(res.total_rows)} 行${res.stride > 1 ? ` / ${res.stride} 行ごとに間引き` : ""}</span>`;
@@ -112,8 +154,17 @@ export async function plotTimeseries(auto = false) {
       }
     });
   } catch (e) {
-    toast(`エラー: ${e.message}`, "error");
+    if (requestId === tsRequestId) toast(`エラー: ${e.message}`, "error");
+  } finally {
+    if (requestId === tsRequestId) setTsLoading(false);
   }
+}
+
+function setTsLoading(loading) {
+  const button = $("#ts-plot");
+  button.disabled = loading;
+  button.textContent = loading ? "更新中…" : "🔄 更新";
+  $("#ts-chart").setAttribute("aria-busy", String(loading));
 }
 
 // 重ね書き: 全信号を1つのY軸に描く
@@ -137,14 +188,19 @@ function renderTsSplit(res) {
   const ys = res.ys;
   const k = ys.length;
   const colors = seriesColors();
+  const labelLines = Math.max(...ys.map((y) => Math.ceil(Array.from(y).length / 48)), 1);
+  const rowHeight = 150 + Math.max(0, labelLines - 1) * 18;
+  const chartHeight = Math.max(480, rowHeight * k + 90);
   const gap = Math.min(0.03, 0.12 / k);
   const bandH = (1 - gap * (k - 1)) / k;
+  const headerH = Math.min((22 * labelLines + 4) / chartHeight, bandH * 0.32);
 
   const layout = baseLayout({
-    height: Math.max(460, 150 * k + 90),
+    height: chartHeight,
     showlegend: false,
     hovermode: "x unified",
     margin: { l: 64, r: 20, t: 24, b: 44 },
+    annotations: [],
   });
   const gridStyle = layout.yaxis;
   delete layout.yaxis;
@@ -159,11 +215,18 @@ function renderTsSplit(res) {
 
   ys.forEach((y, i) => {
     const top = 1 - i * (bandH + gap);
+    const bottom = Math.max(0, top - bandH);
     layout[i === 0 ? "yaxis" : `yaxis${i + 1}`] = Object.assign({}, gridStyle, {
-      domain: [Math.max(0, top - bandH), top],
-      // 帯のタイトルを線と同じ色にして凡例の代わりにする
-      title: { text: y, font: { size: 11, color: colors[i % colors.length] } },
+      domain: [bottom, Math.max(bottom + 0.01, top - headerH)],
       tickfont: { size: 10 },
+    });
+    // 長い名前を縦向きの軸タイトルにすると隣の段へ重なるため、
+    // 各段の上部に横書き・折り返し可能な見出しとして表示する。
+    layout.annotations.push({
+      xref: "paper", yref: "paper", x: 0, y: top,
+      xanchor: "left", yanchor: "top", showarrow: false, align: "left",
+      text: wrapTsAxisLabel(y),
+      font: { size: 11, color: colors[i % colors.length] },
     });
   });
   // X軸 (時間) は1本を全帯で共有し、目盛りは最下段に付ける
@@ -173,6 +236,15 @@ function renderTsSplit(res) {
     title: { text: res.x },
   });
   Plotly.react("ts-chart", traces, layout, PLOT_CONFIG);
+}
+
+function wrapTsAxisLabel(label, lineLength = 48) {
+  const chars = Array.from(label);
+  const lines = [];
+  for (let i = 0; i < chars.length; i += lineLength) {
+    lines.push(esc(chars.slice(i, i + lineLength).join("")));
+  }
+  return `<b>${lines.join("<br>")}</b>`;
 }
 
 $("#ts-mode").addEventListener("change", tsAutoPlot);

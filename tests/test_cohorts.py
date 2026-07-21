@@ -90,6 +90,23 @@ def test_cohort_histogram2d_uses_common_edges_and_density(ingest_csv) -> None:
         assert sum(map(sum, cohort["pooled_percents"])) == pytest.approx(100, abs=1e-4)
 
 
+def test_cohort_dataset_summary_treats_each_dataset_as_one_sample(ingest_csv) -> None:
+    ingest_csv("speed\n0\n10\n", filename="a1.csv", tags=["A社"])
+    ingest_csv("speed\n10\n20\n", filename="a2.csv", tags=["A社"])
+    ingest_csv("speed\n20\n30\n", filename="b1.csv", tags=["B社"])
+    ingest_csv("speed\n30\n40\n", filename="b2.csv", tags=["B社"])
+
+    result = cohorts.compare_dataset_summary(specs(), "speed", metric="avg")
+
+    assert sorted(result["cohorts"][0]["values"]) == [5.0, 15.0]
+    assert sorted(result["cohorts"][1]["values"]) == [25.0, 35.0]
+    assert result["cohorts"][0]["summary"]["mean"] == 10.0
+    assert result["cohorts"][1]["summary"]["mean"] == 30.0
+    assert result["comparison"]["difference"] == 20.0
+    assert result["comparison"]["cliffs_delta"] == 1.0
+    assert result["comparison"]["hedges_g"] is not None
+
+
 def test_cohort_transitions_compare_event_frequency(ingest_csv) -> None:
     ingest_csv(CSV_A, filename="a.csv", tags=["A社"])
     ingest_csv(CSV_B, filename="b.csv", tags=["B社"])
@@ -136,6 +153,10 @@ def test_cohort_api_resolves_and_aggregates(ingest_csv) -> None:
             "/api/compare/cohorts/histogram2d",
             json={**payload, "x": "speed", "y": "rpm", "bins_x": 5, "bins_y": 5},
         )
+        summary = client.post(
+            "/api/compare/cohorts/summary",
+            json={**payload, "column": "speed", "metric": "q50", "filters": []},
+        )
         transitions = client.post(
             "/api/compare/cohorts/transitions",
             json={**payload, "state_column": "gear", "order_by": "time"},
@@ -147,6 +168,8 @@ def test_cohort_api_resolves_and_aggregates(ingest_csv) -> None:
     assert [item["total_points"] for item in histogram.json()["cohorts"]] == [6, 6]
     assert histogram2d.status_code == 200
     assert [item["total_points"] for item in histogram2d.json()["cohorts"]] == [6, 6]
+    assert summary.status_code == 200
+    assert [item["summary"]["n"] for item in summary.json()["cohorts"]] == [1, 1]
     assert transitions.status_code == 200
     assert [item["total_events"] for item in transitions.json()["cohorts"]] == [2, 4]
 

@@ -116,6 +116,7 @@ async function loadView(v) {
       setValue("#cmp-transition-order", c.transition_order);
       setValue("#cmp-transition-denominator", c.transition_denominator);
       if (c.normalization) $("#cmp-cohort-normalization").value = c.normalization;
+      if (c.statistic) $("#cmp-cohort-statistic").value = c.statistic;
       if (c.transition_scale) $("#cmp-transition-scale").value = c.transition_scale;
       runCompare();
       toast(`ビュー「${v.name}」を読み込みました`);

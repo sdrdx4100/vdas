@@ -206,6 +206,32 @@ body {
   color: var(--text-secondary);
 }
 
+.analysis-context {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 38px;
+  margin-top: 12px;
+  padding: 7px 10px;
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  background: var(--card-bg);
+  box-shadow: var(--card-shadow);
+}
+
+.analysis-context-label {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.analysis-context-name {
+  margin-right: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ---------- カード ---------- */
 
 .card {
@@ -366,6 +392,14 @@ table.data td.num { font-variant-numeric: tabular-nums; }
 .col-picker label:hover { background: var(--subtle-hover); }
 
 .col-picker input[type="checkbox"] { accent-color: var(--accent); }
+
+.selection-summary {
+  align-self: center;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 
 .col-type {
   margin-left: auto;

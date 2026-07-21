@@ -16,6 +16,7 @@ export async function refreshDatasets() {
   fillDatasetSelect($("#ts-dataset"));
   fillDatasetSelect($("#st-dataset"));
   fillDatasetSelect($("#cl-dataset"));
+  document.dispatchEvent(new CustomEvent("datasets-refreshed"));
   renderCmpTagFilter();
   renderCmpDatasets();
   renderCmpCohorts();

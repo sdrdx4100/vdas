@@ -166,22 +166,24 @@ def compare_dataset_summary(
             }
         )
 
-    comparison = None
+    comparisons = []
     if len(cohort_series) >= 2:
-        comparison = _compare_dataset_values(
-            cohort_series[0]["values"], cohort_series[1]["values"]
-        )
-        comparison.update(
-            {
-                "baseline": cohort_series[0]["name"],
-                "comparison": cohort_series[1]["name"],
-            }
-        )
+        baseline = cohort_series[0]
+        for candidate in cohort_series[1:]:
+            comparison = _compare_dataset_values(baseline["values"], candidate["values"])
+            comparison.update(
+                {
+                    "baseline": baseline["name"],
+                    "comparison": candidate["name"],
+                }
+            )
+            comparisons.append(comparison)
     return {
         "column": column,
         "metric": metric,
         "cohorts": cohort_series,
-        "comparison": comparison,
+        "comparison": comparisons[0] if comparisons else None,
+        "comparisons": comparisons,
         "overlaps": resolution["overlaps"],
     }
 

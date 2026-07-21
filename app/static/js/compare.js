@@ -1,4 +1,4 @@
-/* 自由分析タブ: タグで定義したデータセット集合A/Bの統計比較 */
+/* 自由分析タブ: タグで定義した1つ以上のデータセット集合を集計・比較 */
 import { $, $$, api, toast, debounce, esc } from "./api.js";
 import { state } from "./state.js";
 import { loadSchema, renderFilters, activeFilters } from "./filters.js";
@@ -27,32 +27,45 @@ export function renderCmpTagFilter() {
 }
 
 function cohortPayload() {
-  return activeCohortSpecs().map((spec) => ({
+  return state.cmp.cohortSpecs.map((spec) => ({
     name: spec.name,
     tags: [...spec.tags],
     match: spec.match,
   }));
 }
 
-function activeCohortSpecs() {
-  if (state.cmp.cohortAnalysisMode === "a") return state.cmp.cohortSpecs.slice(0, 1);
-  if (state.cmp.cohortAnalysisMode === "b") return state.cmp.cohortSpecs.slice(1, 2);
-  return state.cmp.cohortSpecs;
-}
-
 function cohortsReady() {
-  return activeCohortSpecs().every((spec) => spec.tags.size > 0);
+  return state.cmp.cohortSpecs.length > 0
+    && state.cmp.cohortSpecs.every((spec) => spec.name.trim() && spec.tags.size > 0);
 }
 
 export function renderCmpCohorts() {
-  const mode = state.cmp.cohortAnalysisMode;
-  $(".cohort-builder-grid").classList.toggle("single", mode !== "compare");
-  $$(".cohort-builder").forEach((builder) => {
-    const index = Number(builder.dataset.cohortIndex);
-    const spec = state.cmp.cohortSpecs[index];
-    builder.hidden = (mode === "a" && index === 1) || (mode === "b" && index === 0);
+  const wrap = $("#cmp-cohort-builders");
+  wrap.innerHTML = "";
+  state.cmp.cohortSpecs.forEach((spec, index) => {
+    const builder = document.createElement("div");
+    builder.className = "cohort-builder";
+    builder.dataset.cohortIndex = index;
+    builder.innerHTML = `
+      <div class="cohort-heading">
+        <span class="cohort-badge" style="background:${seriesColors()[index % seriesColors().length]}">${index + 1}</span>
+        <input class="cohort-name-input" type="text" aria-label="グループ名">
+        ${state.cmp.cohortSpecs.length > 1 ? '<button class="btn subtle danger-text cohort-remove" type="button">削除</button>' : ""}
+      </div>
+      <label class="field">タグの組み合わせ
+        <select class="cohort-match"><option value="all">すべて含む (AND)</option><option value="any">いずれか含む (OR)</option></select>
+      </label>
+      <div class="cohort-tags"></div>`;
+    const name = builder.querySelector(".cohort-name-input");
     const match = builder.querySelector(".cohort-match");
     const tags = builder.querySelector(".cohort-tags");
+    name.value = spec.name;
+    name.onchange = () => {
+      spec.name = name.value.trim() || `グループ${index + 1}`;
+      name.value = spec.name;
+      state.cmp.cohortResolution = null;
+      resolveCmpCohorts(true);
+    };
     match.value = spec.match;
     match.onchange = () => {
       spec.match = match.value;
@@ -61,9 +74,7 @@ export function renderCmpCohorts() {
     tags.innerHTML = "";
     if (!state.tags.length) {
       tags.innerHTML = '<span class="hint">タグがありません。データ管理でタグを登録してください。</span>';
-      return;
-    }
-    for (const tag of state.tags) {
+    } else for (const tag of state.tags) {
       const chip = document.createElement("button");
       chip.type = "button";
       chip.className = "chip clickable" + (spec.tags.has(tag) ? " on" : "");
@@ -76,15 +87,24 @@ export function renderCmpCohorts() {
       });
       tags.appendChild(chip);
     }
+    builder.querySelector(".cohort-remove")?.addEventListener("click", () => {
+      state.cmp.cohortSpecs.splice(index, 1);
+      state.cmp.cohortResolution = null;
+      renderCmpCohorts();
+      resolveCmpCohorts(true);
+    });
+    wrap.appendChild(builder);
   });
-  $("#cmp-analysis-mode").value = mode;
 }
 
-$("#cmp-analysis-mode").addEventListener("change", () => {
-  state.cmp.cohortAnalysisMode = $("#cmp-analysis-mode").value;
+$("#cmp-add-cohort").addEventListener("click", () => {
+  const used = new Set(state.cmp.cohortSpecs.map((spec) => spec.name));
+  let number = state.cmp.cohortSpecs.length + 1;
+  while (used.has(`グループ${number}`)) number += 1;
+  state.cmp.cohortSpecs.push({ name: `グループ${number}`, tags: new Set(), match: "all" });
   state.cmp.cohortResolution = null;
   renderCmpCohorts();
-  resolveCmpCohorts(true);
+  resolveCmpCohorts(false);
 });
 
 export async function resolveCmpCohorts(autoRun = false) {
@@ -94,10 +114,7 @@ export async function resolveCmpCohorts(autoRun = false) {
     state.cmp.cohortResolution = null;
     state.cmp.schema = null;
     status.className = "cohort-status";
-    const target = state.cmp.cohortAnalysisMode === "compare"
-      ? "A/Bそれぞれ"
-      : `${state.cmp.cohortAnalysisMode.toUpperCase()}集合`;
-    status.textContent = `${target}にタグを1つ以上選択してください。`;
+    status.textContent = "すべてのグループに名前とタグを1つ以上指定してください。";
     await updateCmpColumns([]);
     return null;
   }
@@ -115,7 +132,7 @@ export async function resolveCmpCohorts(autoRun = false) {
       .map((cohort) => `${cohort.name}: ${cohort.dataset_count}件 / ${cohort.row_count.toLocaleString("ja-JP")}行`)
       .join("　");
     const overlap = resolution.overlaps.length
-      ? `　⚠ ${resolution.overlaps.length}件がA/B両方に含まれます`
+      ? `　⚠ ${resolution.overlaps.length}件が複数グループに含まれます`
       : "";
     status.className = "cohort-status" + (overlap ? " warning" : "");
     status.textContent = summary + overlap;
@@ -324,7 +341,7 @@ export async function runCompare(auto = false) {
   const ids = cmpSelectedIds();
   const signal = $("#cmp-signal").value;
   if (ids.length < 2) return auto || toast("データセットを2つ以上選択してください", "error");
-  if (!signal) return auto || toast("比較する信号を選択してください", "error");
+  if (!signal) return auto || toast("分析する信号を選択してください", "error");
   const ctx = {
     ids, signal,
     groupBy: $("#cmp-groupby").value,
@@ -363,8 +380,8 @@ async function runCohortCompare(auto = false) {
   const signal = $("#cmp-signal").value;
   const x = $("#cmp-cohort-x").value;
   const y = $("#cmp-cohort-y").value;
-  if (!signal) return auto || toast("比較する信号を選択してください", "error");
-  if (!x || !y || x === y) return auto || toast("XとYには別の数値信号を選択してください", "error");
+  if (!signal) return auto || toast("分析する信号を選択してください", "error");
+  const canRender2d = x && y && x !== y;
   const filters = activeFilters(state.cmp);
   const normalization = $("#cmp-cohort-normalization").value;
   const statistic = $("#cmp-cohort-statistic").value;
@@ -376,14 +393,20 @@ async function runCohortCompare(auto = false) {
   try {
     const [histogram, histogram2d, datasetSummary] = await Promise.all([
       cohortPost("/api/compare/cohorts/histogram", { column: signal, bins: 40, filters }),
-      cohortPost("/api/compare/cohorts/histogram2d", { x, y, bins_x: 32, bins_y: 32, filters }),
+      canRender2d
+        ? cohortPost("/api/compare/cohorts/histogram2d", { x, y, bins_x: 32, bins_y: 32, filters })
+        : Promise.resolve(null),
       cohortPost("/api/compare/cohorts/summary", { column: signal, metric: statistic, filters }),
     ]);
     if (runToken !== state.cmp.cohortRunToken) return;
     renderCohortSummary(resolution, histogram);
     renderCohortHistogram(histogram, normalization);
     renderCohortDatasetSummary(datasetSummary);
-    renderCohortHistogram2d(histogram2d, normalization);
+    if (histogram2d) renderCohortHistogram2d(histogram2d, normalization);
+    else {
+      chartRegistry.delete("cmp-cohort-2d-chart");
+      Plotly.purge("cmp-cohort-2d-chart");
+    }
     await renderCohortTransitions(filters, normalization, runToken);
     if (runToken !== state.cmp.cohortRunToken) return;
     requestAnimationFrame(() => {
@@ -402,22 +425,22 @@ async function runCohortCompare(auto = false) {
 function renderCohortDatasetSummary(result) {
   const colors = seriesColors();
   const metricLabels = { avg: "平均", q50: "中央値", q75: "Q75" };
-  const comparison = result.comparison;
+  const comparisons = result.comparisons || (result.comparison ? [result.comparison] : []);
   const cards = result.cohorts.map((cohort, index) => `
     <div class="cohort-summary-card">
-      <strong><span class="cohort-badge ${index ? "cohort-b" : "cohort-a"}">${esc(cohort.name)}</span>
-        ${metricLabels[result.metric]}の集合要約</strong>
+      <strong><span class="cohort-badge" style="background:${colors[index % colors.length]}">${index + 1}</span>
+        ${esc(cohort.name)} — ${metricLabels[result.metric]}の集合要約</strong>
       <span>n=${cohort.summary.n} / 群平均 ${esc(fmtStat(cohort.summary.mean))} /
         群中央値 ${esc(fmtStat(cohort.summary.median))} / 標準偏差 ${esc(fmtStat(cohort.summary.std))}</span>
     </div>`).join("");
-  const difference = comparison ? `
+  const difference = comparisons.map((comparison) => `
     <div class="cohort-summary-card">
       <strong>${esc(comparison.comparison)} − ${esc(comparison.baseline)}</strong>
       <span>差 ${esc(fmtStat(comparison.difference))}
         ${comparison.difference_percent == null ? "" : `(${comparison.difference_percent >= 0 ? "+" : ""}${comparison.difference_percent.toFixed(2)}%)`} /
         95%区間 ${comparison.ci95 ? `${esc(fmtStat(comparison.ci95[0]))} ～ ${esc(fmtStat(comparison.ci95[1]))}` : "—"} /
         Hedges' g ${esc(fmtStat(comparison.hedges_g))} / Cliff's δ ${esc(fmtStat(comparison.cliffs_delta))}</span>
-    </div>` : "";
+    </div>`).join("");
   $("#cmp-cohort-stat-summary").innerHTML = cards + difference;
 
   const traces = result.cohorts.map((cohort, index) => ({
@@ -444,10 +467,11 @@ function renderCohortDatasetSummary(result) {
 }
 
 function renderCohortSummary(resolution, histogram) {
+  const colors = seriesColors();
   const points = new Map(histogram.cohorts.map((cohort) => [cohort.name, cohort.total_points]));
   $("#cmp-cohort-summary").innerHTML = resolution.cohorts.map((cohort, index) => `
     <div class="cohort-summary-card">
-      <strong><span class="cohort-badge ${index ? "cohort-b" : "cohort-a"}">${esc(cohort.name)}</span>
+      <strong><span class="cohort-badge" style="background:${colors[index % colors.length]}">${index + 1}</span>
         ${esc(cohort.name)}グループ</strong>
       <span>${cohort.dataset_count.toLocaleString("ja-JP")}データセット / ${cohort.row_count.toLocaleString("ja-JP")}行 /
         有効点 ${Number(points.get(cohort.name) || 0).toLocaleString("ja-JP")}</span>
@@ -519,6 +543,10 @@ function renderCohortHistogram2d(result, normalization) {
     ));
     return;
   }
+  if (result.cohorts.length > 2) {
+    renderCohortDensityGrid(result, normalization, x, y);
+    return;
+  }
   const second = result.cohorts[1];
   const secondZ = second[normalization];
   const difference = matrixDifference(firstZ, secondZ);
@@ -556,6 +584,55 @@ function renderCohortHistogram2d(result, normalization) {
       showlegend: false,
     }),
     PLOT_CONFIG,
+  ));
+}
+
+function renderCohortDensityGrid(result, normalization, x, y) {
+  const count = result.cohorts.length;
+  const columns = Math.min(3, count);
+  const rows = Math.ceil(count / columns);
+  const horizontalGap = 0.07, verticalGap = 0.13;
+  const cellWidth = (1 - horizontalGap * (columns - 1)) / columns;
+  const cellHeight = (1 - verticalGap * (rows - 1)) / rows;
+  const maxDensity = Math.max(
+    ...result.cohorts.flatMap((cohort) => cohort[normalization].flat()), 0.000001
+  );
+  const layout = baseLayout({
+    height: Math.max(480, 300 * rows + 60),
+    margin: { l: 55, r: 65, t: 48, b: 50 },
+    showlegend: false,
+    annotations: [],
+  });
+  const traces = result.cohorts.map((cohort, index) => {
+    const axisNumber = index + 1;
+    const suffix = axisNumber === 1 ? "" : axisNumber;
+    const column = index % columns, row = Math.floor(index / columns);
+    const left = column * (cellWidth + horizontalGap);
+    const top = 1 - row * (cellHeight + verticalGap);
+    const xKey = axisNumber === 1 ? "xaxis" : `xaxis${axisNumber}`;
+    const yKey = axisNumber === 1 ? "yaxis" : `yaxis${axisNumber}`;
+    layout[xKey] = {
+      domain: [left, left + cellWidth], anchor: `y${suffix}`,
+      title: { text: result.x }, gridcolor: cssVar("--chart-grid"),
+    };
+    layout[yKey] = {
+      domain: [top - cellHeight, top], anchor: `x${suffix}`,
+      title: { text: result.y }, gridcolor: cssVar("--chart-grid"),
+    };
+    layout.annotations.push({
+      text: esc(cohort.name), x: left + cellWidth / 2, y: top + 0.035,
+      xref: "paper", yref: "paper", showarrow: false,
+    });
+    return {
+      type: "heatmap", x, y, z: cohort[normalization], name: cohort.name,
+      xaxis: `x${suffix}`, yaxis: `y${suffix}`, colorscale: "Viridis",
+      zmin: 0, zmax: maxDensity, showscale: index === count - 1,
+      colorbar: { title: { text: "割合 (%)" }, thickness: 10 },
+      hovertemplate: `${esc(cohort.name)}<br>${esc(result.x)}=%{x}<br>${esc(result.y)}=%{y}<br>%{z:.3f}%<extra></extra>`,
+    };
+  });
+  renderChart("cmp-cohort-2d-chart", () => Plotly.react(
+    "cmp-cohort-2d-chart", traces, layout, PLOT_CONFIG
   ));
 }
 
@@ -797,13 +874,12 @@ $("#cmp-save-view").addEventListener("click", async () => {
     return toast("データセットを2つ以上選択してください", "error");
   }
   if (state.cmp.mode === "cohorts" && !state.cmp.cohortResolution) {
-    return toast("A/Bのタグ条件を指定してください", "error");
+    return toast("分析するタググループを設定してください", "error");
   }
   const name = await openNameDialog("比較ビューを保存");
   if (!name) return;
   const cohortConfig = state.cmp.mode === "cohorts" ? {
     mode: "cohorts",
-    analysis_mode: state.cmp.cohortAnalysisMode,
     cohorts: cohortPayload(),
     normalization: $("#cmp-cohort-normalization").value,
     statistic: $("#cmp-cohort-statistic").value,

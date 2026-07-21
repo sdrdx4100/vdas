@@ -591,11 +591,9 @@ table.data td.num { font-variant-numeric: tabular-nums; }
 
 .cohort-builder-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 14px;
 }
-
-.cohort-builder-grid.single { grid-template-columns: 1fr; }
 
 .cohort-builder {
   padding: 14px;
@@ -611,6 +609,12 @@ table.data td.num { font-variant-numeric: tabular-nums; }
   margin-bottom: 10px;
 }
 
+.cohort-name-input {
+  flex: 1;
+  min-width: 120px;
+  font-weight: 600;
+}
+
 .cohort-badge {
   display: inline-grid;
   place-items: center;
@@ -620,9 +624,6 @@ table.data td.num { font-variant-numeric: tabular-nums; }
   color: #fff;
   font-weight: 700;
 }
-
-.cohort-a { background: var(--series-1); }
-.cohort-b { background: var(--series-2); }
 
 .cohort-tags {
   display: flex;

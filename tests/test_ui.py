@@ -20,7 +20,8 @@ def test_comparison_workspace_and_modules_are_served() -> None:
             "cmp-cohort-2d-chart",
             "cmp-cohort-stat-summary",
             "cmp-cohort-stat-chart",
-            "cmp-analysis-mode",
+            "cmp-add-cohort",
+            "cmp-cohort-builders",
             "cmp-transition-chart",
         ):
             assert f'id="{element_id}"' in html
@@ -28,6 +29,8 @@ def test_comparison_workspace_and_modules_are_served() -> None:
             assert f'data-analysis-context="{context}"' in html
         assert '<script type="module" src="/static/js/main.js"></script>' in html
         assert 'data-cmp-mode="datasets"' not in html
+        assert "A集合のみ" not in html
+        assert "B集合のみ" not in html
         assert '<div id="cmp-cohort-selector">' in html
         assert "個別ファイルではなく、タグ条件に一致するすべてのデータセット" in html
 

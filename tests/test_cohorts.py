@@ -124,6 +124,23 @@ def test_cohort_dataset_summary_treats_each_dataset_as_one_sample(ingest_csv) ->
     assert result["comparison"]["hedges_g"] is not None
 
 
+def test_cohort_dataset_summary_compares_multiple_groups_to_first(ingest_csv) -> None:
+    ingest_csv("speed\n0\n10\n", filename="base.csv", tags=["基準"])
+    ingest_csv("speed\n10\n20\n", filename="group2.csv", tags=["条件2"])
+    ingest_csv("speed\n20\n30\n", filename="group3.csv", tags=["条件3"])
+    groups = [
+        {"name": "基準群", "tags": ["基準"], "match": "all"},
+        {"name": "条件2群", "tags": ["条件2"], "match": "all"},
+        {"name": "条件3群", "tags": ["条件3"], "match": "all"},
+    ]
+
+    result = cohorts.compare_dataset_summary(groups, "speed", metric="avg")
+
+    assert [cohort["name"] for cohort in result["cohorts"]] == ["基準群", "条件2群", "条件3群"]
+    assert [item["comparison"] for item in result["comparisons"]] == ["条件2群", "条件3群"]
+    assert [item["difference"] for item in result["comparisons"]] == [10.0, 20.0]
+
+
 def test_cohort_transitions_compare_event_frequency(ingest_csv) -> None:
     ingest_csv(CSV_A, filename="a.csv", tags=["A社"])
     ingest_csv(CSV_B, filename="b.csv", tags=["B社"])

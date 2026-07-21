@@ -236,7 +236,7 @@
   <section class="page" id="page-compare">
     <div class="page-header">
       <h1>自由分析</h1>
-      <p>タグで定義したA/Bのデータ集合を、ログ単位の統計・分布・動作領域・状態遷移で比較します。</p>
+      <p>タグで1つ以上のデータ集合を定義し、ログ単位の統計・分布・動作領域・状態遷移を集計・比較します。</p>
     </div>
 
     <div class="card">
@@ -255,35 +255,14 @@
             <h2>タグで分析対象を作る</h2>
             <p class="hint">個別ファイルではなく、タグ条件に一致するすべてのデータセットが分析対象です。</p>
           </div>
-          <label class="field">分析モード
-            <select id="cmp-analysis-mode">
-              <option value="a">A集合のみ</option>
-              <option value="b">B集合のみ</option>
-              <option value="compare" selected>AとBを比較</option>
-            </select>
-          </label>
+          <button class="btn" id="cmp-add-cohort" type="button">＋ 比較グループを追加</button>
         </div>
-        <div class="cohort-builder-grid">
-          <div class="cohort-builder" data-cohort-index="0">
-            <div class="cohort-heading"><span class="cohort-badge cohort-a">A</span><strong>グループA</strong></div>
-            <label class="field">タグの組み合わせ
-              <select class="cohort-match"><option value="all">すべて含む (AND)</option><option value="any">いずれか含む (OR)</option></select>
-            </label>
-            <div class="cohort-tags"></div>
-          </div>
-          <div class="cohort-builder" data-cohort-index="1">
-            <div class="cohort-heading"><span class="cohort-badge cohort-b">B</span><strong>グループB</strong></div>
-            <label class="field">タグの組み合わせ
-              <select class="cohort-match"><option value="all">すべて含む (AND)</option><option value="any">いずれか含む (OR)</option></select>
-            </label>
-            <div class="cohort-tags"></div>
-          </div>
-        </div>
-        <div id="cmp-cohort-status" class="cohort-status">A集合にタグを1つ以上選択してください。</div>
+        <div class="cohort-builder-grid" id="cmp-cohort-builders"></div>
+        <div id="cmp-cohort-status" class="cohort-status">グループ1にタグを1つ以上選択してください。</div>
       </div>
 
       <div class="controls-row" style="margin-top:14px;">
-        <label class="field">比較する信号
+        <label class="field">分析する信号
           <select id="cmp-signal" style="min-width:200px;"></select>
         </label>
         <label class="field cmp-dataset-only">グループ列 (ギア段・モードなど)
@@ -306,7 +285,7 @@
         <div class="cohort-result-header">
           <div>
             <h2>タグ集合の分析</h2>
-            <p class="hint">B集合を有効にすると、同じ指標でA/Bを比較します。走行量の違いを除く場合は「データセット均等」を使います。</p>
+            <p class="hint">1グループなら単体集計、2グループ以上なら同じ指標で比較します。差と効果量は先頭グループを基準に算出します。</p>
           </div>
           <label class="field">正規化
             <select id="cmp-cohort-normalization">

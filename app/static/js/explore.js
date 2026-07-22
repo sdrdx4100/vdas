@@ -116,6 +116,7 @@ export function exUpdateControls() {
   show("#ex-y-wrap", yNeeded);
   show("#ex-color-wrap", !!v.color && state.ex.source === "dataset");
   show("#ex-agg-wrap", !!v.agg);
+  exSyncAggOptions();
   show("#ex-bins-wrap", v.bins);
   show("#ex-points-wrap", v.points);
   exFillColumns();
@@ -165,6 +166,18 @@ $("#ex-dataset").addEventListener("change", async () => {
 ["#ex-x", "#ex-y", "#ex-color", "#ex-bins", "#ex-points"].forEach((sel) =>
   $(sel).addEventListener("change", exAuto));
 $("#ex-agg").addEventListener("change", () => { exUpdateControls(); exAuto(); });
+
+// タググループ比較では母数 (行数) が違うため、件数・合計は不公平になる。
+// N非依存の集計 (平均/中央値/最小/最大/割合%) だけ選べるようにする。
+const N_DEPENDENT_AGGS = ["count", "sum"];
+function exSyncAggOptions() {
+  const groupMode = state.ex.source === "groups";
+  const sel = $("#ex-agg");
+  [...sel.options].forEach((o) => {
+    o.hidden = groupMode && N_DEPENDENT_AGGS.includes(o.value);
+  });
+  if (groupMode && N_DEPENDENT_AGGS.includes(sel.value)) sel.value = "avg";
+}
 
 $("#ex-add-filter").addEventListener("click", () => {
   if (!state.ex.schema) return toast("先にデータセットを選択してください", "error");
@@ -491,13 +504,13 @@ function renderExGroupChart(res, spec) {
     traces = res.series.map((s, i) => {
       const color = colors[i % colors.length];
       return {
-        type: "contour", x: cx, y: cy, z: s.matrix, name: s.label,
+        type: "contour", x: cx, y: cy, z: s.percents || s.matrix, name: s.label,
         showscale: false, showlegend: true,
         colorscale: [[0, color], [1, color]],
         contours: { coloring: "lines" },
         line: { width: 2 },
         ncontours: 8,
-        hovertemplate: `${esc(s.label)}<br>${esc(spec.x)}: %{x}<br>${esc(spec.y)}: %{y}<br>件数: %{z}<extra></extra>`,
+        hovertemplate: `${esc(s.label)}<br>${esc(spec.x)}: %{x}<br>${esc(spec.y)}: %{y}<br>密度 %{z:.3f}%<extra></extra>`,
       };
     });
     layout = base({

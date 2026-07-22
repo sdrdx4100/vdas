@@ -146,3 +146,21 @@ def test_chart_groups_missing_column_names_group(ingest_csv) -> None:
             ],
             "histogram", x="speed",
         )
+
+
+def test_chart_groups_heatmap_returns_group_normalized_percents(ingest_csv) -> None:
+    # A社は2ログ(計12行)、B社は1ログ(6行)で母数が違う
+    a1 = ingest_csv(CSV_A, filename="a1.csv")
+    a2 = ingest_csv(CSV_A, filename="a2.csv")
+    b = ingest_csv(CSV_B, filename="b.csv")
+    res = queries.chart_groups(
+        [
+            {"label": "A社", "dataset_ids": [a1["id"], a2["id"]]},
+            {"label": "B社", "dataset_ids": [b["id"]]},
+        ],
+        "heatmap", x="speed", y="rpm", bins=10,
+    )
+    for series in res["series"]:
+        # 各グループの割合% は母数に関わらず合計100%になる
+        total = sum(sum(row) for row in series["percents"])
+        assert total == pytest.approx(100.0, abs=0.01)

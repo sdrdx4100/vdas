@@ -1020,7 +1020,10 @@ def chart_groups(groups: list[dict[str, Any]], kind: str, x: str | None = None,
                 for bx, by, n in rows:
                     if bx is not None and by is not None and 0 <= bx < bins and 0 <= by < bins:
                         matrix[by][bx] = n
-                series.append({"label": label, "matrix": matrix})
+                # 母数 (行数) が違うグループを公平に重ねるため割合% も返す
+                total = sum(sum(r) for r in matrix) or 1
+                percents = [[round(v * 100 / total, 5) for v in r] for r in matrix]
+                series.append({"label": label, "matrix": matrix, "percents": percents})
         result = {"kind": "heatmap",
                   "x_edges": [mnx + wx * i for i in range(bins + 1)],
                   "y_edges": [mny + wy * i for i in range(bins + 1)],

@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 
 
-def test_comparison_workspace_and_modules_are_served() -> None:
+def test_analysis_workspace_and_modules_are_served() -> None:
     with TestClient(app) as client:
         index = client.get("/")
         assert index.status_code == 200
@@ -14,35 +14,41 @@ def test_comparison_workspace_and_modules_are_served() -> None:
             "ts-selection-summary",
             "ts-select-visible",
             "ts-clear-selection",
-            "cmp-cohort-selector",
-            "cmp-cohort-results",
-            "cmp-cohort-hist-chart",
-            "cmp-cohort-2d-chart",
-            "cmp-cohort-stat-summary",
-            "cmp-cohort-stat-chart",
-            "cmp-multi-signals",
-            "cmp-multi-chart",
-            "cmp-multi-view",
-            "cmp-add-cohort",
-            "cmp-cohort-builders",
-            "cmp-transition-chart",
+            # 自由分析 (タググループ統計分析)
+            "an-tags",
+            "an-kind",
+            "an-kind-hint",
+            "an-signal",
+            "an-metric",
+            "an-norm",
+            "an-filters",
+            "an-chart",
+            "an-table",
+            "an-stats",
+            # グラフ作成 (チャートビルダー)
+            "ex-kind",
+            "ex-chart",
+            "ex-group-tags",
+            "ex-src-groups",
         ):
             assert f'id="{element_id}"' in html
         for context in ("timeseries", "stats", "cluster"):
             assert f'data-analysis-context="{context}"' in html
         assert '<script type="module" src="/static/js/main.js"></script>' in html
+        # 旧ワークスペースのUIは撤去済み
         assert 'data-cmp-mode="datasets"' not in html
-        assert "A集合のみ" not in html
-        assert "B集合のみ" not in html
-        assert "基準 (自社) データセット" not in html
-        assert '<div id="cmp-cohort-selector">' in html
-        assert "個別ファイルではなく、タグ条件に一致するすべてのデータセット" in html
+        assert "cmp-cohort-builders" not in html
+        assert "cmp-multi-signals" not in html
+        # 分析ギャラリーは1種類ずつ選ぶ方式
+        for kind in ("summary", "distribution", "share", "region", "transitions"):
+            assert f'data-kind="{kind}"' in html
 
         for module in (
             "api.js",
+            "analysis.js",
             "charts.js",
-            "compare.js",
             "datasets.js",
+            "explore.js",
             "main.js",
             "state.js",
             "workspace.js",
@@ -54,3 +60,5 @@ def test_comparison_workspace_and_modules_are_served() -> None:
                 "application/javascript",
                 "text/javascript",
             }
+
+        assert client.get("/static/js/compare.js").status_code == 404

@@ -2,7 +2,7 @@
 import { $, $$ } from "./api.js";
 import { state } from "./state.js";
 import { refreshViewsPage } from "./views.js";
-import { autoSelectCmpDatasets } from "./compare.js";
+import { onAnalysisPageEnter } from "./analysis.js";
 
 $$(".nav-item[data-page]").forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -11,7 +11,7 @@ $$(".nav-item[data-page]").forEach((btn) => {
     $$(".page").forEach((p) => p.classList.remove("active"));
     $(`#page-${btn.dataset.page}`).classList.add("active");
     if (btn.dataset.page === "views") refreshViewsPage();
-    if (btn.dataset.page === "compare") autoSelectCmpDatasets();
+    if (btn.dataset.page === "compare") onAnalysisPageEnter();
     // 単一データセットのタブ: 未選択なら最初のデータセットを自動選択して即描画。
     // 選択済みでもスキーマ未読込 (別画面で値だけ変えた場合) なら読み込んで描画
     if (["timeseries", "stats", "cluster", "explore"].includes(btn.dataset.page)) {

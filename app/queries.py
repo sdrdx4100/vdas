@@ -687,7 +687,7 @@ def chart(dataset_id: str, kind: str, x: str | None = None, y: str | None = None
             lookup = {(g, c): n for g, c, n in rows}
             series = []
             for c in color_groups:
-                counts = [lookup.get((l, c), 0) for l in labels]
+                counts = [lookup.get((lbl, c), 0) for lbl in labels]
                 n = sum(lookup.get((l2, c), 0) for l2, c2 in lookup if c2 == c) or 1
                 series.append({"label": c, "counts": counts,
                                "percents": [round(v * 100 / n, 3) for v in counts]})
@@ -943,7 +943,7 @@ def chart_groups(groups: list[dict[str, Any]], kind: str, x: str | None = None,
             labels = _sorted_category_labels(totals)
             series = []
             for label, _s, _c in sources:
-                counts = [per_group[label].get(l, 0) for l in labels]
+                counts = [per_group[label].get(lbl, 0) for lbl in labels]
                 n = sum(per_group[label].values()) or 1
                 series.append({"label": label, "counts": counts,
                                "percents": [round(c * 100 / n, 3) for c in counts]})

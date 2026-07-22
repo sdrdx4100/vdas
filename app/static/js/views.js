@@ -3,7 +3,7 @@ import { $, $$, api, toast, esc } from "./api.js";
 import { state } from "./state.js";
 import { renderFilters } from "./filters.js";
 import { gotoPage } from "./nav.js";
-import { renderCmpCohorts, setCmpMode, setCmpMultiSignals, runCompare } from "./compare.js";
+import { loadAnalysisView } from "./analysis.js";
 import { setTsSelectedColumns, plotTimeseries } from "./timeseries.js";
 import { loadSummary } from "./stats.js";
 
@@ -33,15 +33,19 @@ export async function refreshViewsPage() {
   const vBody = $("#views-table tbody");
   vBody.innerHTML = "";
   $("#views-empty").style.display = views.length ? "none" : "";
-  const kindLabel = { timeseries: "時系列", stats: "統計", compare: "比較", explore: "自由分析" };
+  const kindLabel = { timeseries: "時系列", stats: "統計", compare: "自由分析", explore: "グラフ作成" };
   for (const v of views) {
-    const isCohortView = v.kind === "compare" && v.config.mode === "cohorts";
-    const dsIds = v.kind === "compare" ? (v.config.dataset_ids || []) : [v.dataset_id];
-    const dsNames = isCohortView
-      ? (v.config.cohorts || []).map((cohort) =>
-          `${cohort.name}: ${(cohort.tags || []).join(cohort.match === "any" ? " OR " : " AND ")}`).join(" / ")
-      : dsIds.map((id) => state.datasets.find((d) => d.id === id)?.name || id)
-          .filter(Boolean).join(" / ") || "—";
+    let dsNames;
+    if (v.kind === "compare") {
+      const tags = v.config.tags ||
+        (v.config.cohorts || []).flatMap((cohort) => cohort.tags || []);
+      dsNames = (tags || []).join(" / ") || "—";
+    } else if (v.kind === "explore" && v.config.source === "groups") {
+      dsNames = (v.config.group_tags || []).join(" / ") || "—";
+    } else {
+      dsNames = [v.dataset_id].map((id) => state.datasets.find((d) => d.id === id)?.name || id)
+        .filter(Boolean).join(" / ") || "—";
+    }
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td><strong>${esc(v.name)}</strong></td>
@@ -128,40 +132,8 @@ async function loadView(v) {
   const c = v.config || {};
   if (v.kind === "compare") {
     gotoPage("compare");
-    if (c.mode === "cohorts") {
-      const savedCohorts = c.cohorts || [];
-      state.cmp.cohortSpecs = savedCohorts.length
-        ? savedCohorts.map((cohort, index) => ({
-          name: cohort.name || `グループ${index + 1}`,
-          tags: new Set(cohort.tags || []),
-          match: cohort.match === "any" ? "any" : "all",
-        }))
-        : [{ name: "グループ1", tags: new Set(), match: "all" }];
-      renderCmpCohorts();
-      await setCmpMode("cohorts");
-      state.cmp.filters = (c.filters || []).map((filter) => ({ ...filter }));
-      renderFilters("#cmp-filters", state.cmp);
-      const setValue = (selector, value) => {
-        if (value && [...$(selector).options].some((option) => option.value === value)) {
-          $(selector).value = value;
-        }
-      };
-      setValue("#cmp-signal", c.signal);
-      setValue("#cmp-cohort-x", c.cohort_x);
-      setValue("#cmp-cohort-y", c.cohort_y);
-      setValue("#cmp-transition-state", c.transition_state);
-      setValue("#cmp-transition-order", c.transition_order);
-      setValue("#cmp-transition-denominator", c.transition_denominator);
-      if (c.normalization) $("#cmp-cohort-normalization").value = c.normalization;
-      if (c.statistic) $("#cmp-cohort-statistic").value = c.statistic;
-      if (c.multi_signals) setCmpMultiSignals(c.multi_signals);
-      if (c.multi_view) $("#cmp-multi-view").value = c.multi_view;
-      if (c.transition_scale) $("#cmp-transition-scale").value = c.transition_scale;
-      runCompare();
-      toast(`ビュー「${v.name}」を読み込みました`);
-      return;
-    }
-    toast("個別データセット形式の旧比較ビューは、タグ集合へ設定し直してください", "error");
+    await loadAnalysisView(v);
+    toast(`ビュー「${v.name}」を読み込みました`);
     return;
   }
   if (v.kind === "timeseries") {

@@ -70,7 +70,7 @@ $("#cl-run").addEventListener("click", async () => {
     renderClCenters(res);
     setupClCharts(res);
     // 他タブが持っているスキーマキャッシュを無効化する (列が増えたため)
-    delete state.cmp.schemas[dsId];
+    delete state.an.schemas[dsId];
     state.cl.schema = await loadSchema(dsId);
     renderClColumns();
     $$("#cl-cols input").forEach((el) => { el.checked = features.includes(el.value); });

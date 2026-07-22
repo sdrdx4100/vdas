@@ -3,7 +3,7 @@ import { $, $$, api, toast, fmtNum, fmtSize, esc } from "./api.js";
 import { state } from "./state.js";
 import { chipEditor, openTagEditor, updateTagDatalist } from "./modals.js";
 import { gotoPage } from "./nav.js";
-import { renderCmpTagFilter, renderCmpDatasets, renderCmpCohorts } from "./compare.js";
+import { renderAnalysisTags } from "./analysis.js";
 import { refreshLabelsets } from "./views.js";
 
 // ---------- データセット一覧 ----------
@@ -18,9 +18,7 @@ export async function refreshDatasets() {
   fillDatasetSelect($("#cl-dataset"));
   fillDatasetSelect($("#ex-dataset"));
   document.dispatchEvent(new CustomEvent("datasets-refreshed"));
-  renderCmpTagFilter();
-  renderCmpDatasets();
-  renderCmpCohorts();
+  renderAnalysisTags();
 }
 
 export function visibleDatasets() {
@@ -157,7 +155,7 @@ $("#bulk-delete").addEventListener("click", async () => {
     body: JSON.stringify({ dataset_ids: ids }),
   });
   state.dsSelection.clear();
-  state.cmp.schemas = {};
+  state.an.schemas = {};
   toast(`${ids.length} 件を削除しました`);
   refreshDatasets();
 });
@@ -174,8 +172,7 @@ $("#delete-all").addEventListener("click", async () => {
   });
   state.dsSelection.clear();
   state.dataTagFilter.clear();
-  state.cmp.schemas = {};
-  state.cmp.last = null;
+  state.an.schemas = {};
   toast(`全 ${res.deleted} 件を削除しました${includeViews ? " (保存ビュー・ラベルセットも削除)" : ""}`);
   refreshDatasets();
   refreshLabelsets();

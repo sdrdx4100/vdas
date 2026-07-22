@@ -92,3 +92,47 @@ def test_summary_includes_significance_tests(ingest_csv) -> None:
     assert cmp["t_test_p"] is not None
     assert cmp["t_test_p"] < 0.05  # 明確な差
     assert cmp["mann_whitney_p"] is not None
+
+
+def _sine_csv(freq_hz: float, fs: float = 100.0, seconds: float = 10.0) -> str:
+    import numpy as np
+    n = int(fs * seconds)
+    t = np.arange(n) / fs
+    v = np.sin(2 * np.pi * freq_hz * t)
+    lines = ["time,accel"]
+    lines += [f"{ti:.4f},{vi:.6f}" for ti, vi in zip(t, v)]
+    return "\n".join(lines) + "\n"
+
+
+def test_spectrum_detects_dominant_frequency(ingest_csv) -> None:
+    # A社=6Hz中心の振動、B社=2Hz。ピーク周波数がグループ間で違う
+    ingest_csv(_sine_csv(6.0), filename="a.csv", tags=["A社"])
+    ingest_csv(_sine_csv(2.0), filename="b.csv", tags=["B社"])
+    res = methods.cohort_spectrum(specs(), "accel", "time", band=(4.0, 8.0))
+    freqs = res["freqs"]
+    by = {c["name"]: c for c in res["cohorts"]}
+
+    def peak_freq(psd):
+        import numpy as np
+        return freqs[int(np.argmax(psd))]
+
+    assert abs(peak_freq(by["A"]["psd"]) - 6.0) < 1.0
+    assert abs(peak_freq(by["B"]["psd"]) - 2.0) < 1.0
+    # 4-8Hz帯のエネルギーは 6Hz振動の A社 の方が大きい
+    assert by["A"]["band_power"] > by["B"]["band_power"]
+
+
+def test_spectrum_rejects_same_columns(ingest_csv) -> None:
+    ingest_csv(_sine_csv(6.0), filename="a.csv", tags=["A社"])
+    ingest_csv(_sine_csv(2.0), filename="b.csv", tags=["B社"])
+    with pytest.raises(queries.QueryError):
+        methods.cohort_spectrum(specs(), "time", "time")
+
+
+def test_summary_supports_std_and_max_metric(ingest_csv) -> None:
+    ingest_csv("time,accel\n0,0\n1,2\n2,-2\n", filename="a.csv", tags=["A社"])
+    ingest_csv("time,accel\n0,0\n1,5\n2,-5\n", filename="b.csv", tags=["B社"])
+    res = cohorts.compare_dataset_summary(specs(), "accel", metric="std")
+    by = {c["name"]: c for c in res["cohorts"]}
+    # B社の方がばらつきが大きい
+    assert by["B"]["values"][0] > by["A"]["values"][0]

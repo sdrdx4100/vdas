@@ -333,6 +333,7 @@
         <button class="chart-kind" data-kind="regression"><span class="ck-icon">📉</span>回帰・トレンド</button>
         <button class="chart-kind" data-kind="pca"><span class="ck-icon">🧭</span>主成分分析 (PCA)</button>
         <button class="chart-kind" data-kind="correlation"><span class="ck-icon">🔗</span>相関</button>
+        <button class="chart-kind" data-kind="spectrum"><span class="ck-icon">🌊</span>周波数分析 (振動)</button>
       </div>
       <p class="hint" id="an-kind-hint" style="margin:8px 0 0;"></p>
 
@@ -346,6 +347,8 @@
             <option value="avg">平均</option>
             <option value="q50">中央値</option>
             <option value="q75">上位四分位 (Q75)</option>
+            <option value="std">ばらつき (標準偏差)</option>
+            <option value="max">ピーク (最大)</option>
           </select>
         </label>
         <label class="field" id="an-col-wrap">構成比を見る列
@@ -397,6 +400,18 @@
           <span>使用する信号 (2つ以上)</span>
           <div class="col-picker" id="an-signals" style="max-height:150px; margin-top:2px;"></div>
         </div>
+        <label class="field" id="an-fsignal-wrap">振動信号 (加速度など)
+          <select id="an-fsignal" style="min-width:150px;"></select>
+        </label>
+        <label class="field" id="an-forder-wrap">時間列
+          <select id="an-forder" style="min-width:140px;"></select>
+        </label>
+        <label class="field" id="an-fband-wrap">不快帯域 (Hz)
+          <span style="display:flex; gap:4px; align-items:center;">
+            <input type="number" id="an-fbandlo" value="4" min="0" step="0.5" style="width:60px;">〜
+            <input type="number" id="an-fbandhi" value="8" min="0" step="0.5" style="width:60px;">
+          </span>
+        </label>
         <label class="field" id="an-norm-wrap">正規化
           <select id="an-norm">
             <option value="mean">データセット均等</option>

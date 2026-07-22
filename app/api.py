@@ -311,13 +311,13 @@ class CohortHistogramRequest(CohortResolveRequest):
 
 class CohortDatasetSummaryRequest(CohortResolveRequest):
     column: str
-    metric: Literal["avg", "q50", "q75"] = "avg"
+    metric: Literal["avg", "q50", "q75", "std", "max"] = "avg"
     filters: list[FilterSpec] = Field(default_factory=list)
 
 
 class CohortMultiSummaryRequest(CohortResolveRequest):
     columns: list[str] = Field(min_length=1, max_length=20)
-    metric: Literal["avg", "q50", "q75"] = "avg"
+    metric: Literal["avg", "q50", "q75", "std", "max"] = "avg"
     filters: list[FilterSpec] = Field(default_factory=list)
 
 
@@ -434,6 +434,20 @@ class CohortCorrelationRequest(CohortResolveRequest):
 def post_cohort_correlation(req: CohortCorrelationRequest):
     return _wrap(methods.cohort_correlation, _cohort_dicts(req), req.columns,
                  [f.model_dump() for f in req.filters])
+
+
+class CohortSpectrumRequest(CohortResolveRequest):
+    signal: str
+    order_by: str
+    band_low: float = 4.0
+    band_high: float = 8.0
+    filters: list[FilterSpec] = Field(default_factory=list)
+
+
+@router.post("/compare/cohorts/spectrum")
+def post_cohort_spectrum(req: CohortSpectrumRequest):
+    return _wrap(methods.cohort_spectrum, _cohort_dicts(req), req.signal, req.order_by,
+                 [f.model_dump() for f in req.filters], (req.band_low, req.band_high))
 
 
 @router.post("/compare/cohorts/events")

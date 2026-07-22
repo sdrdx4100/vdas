@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
+from scipy import signal as scipy_signal
 from sklearn.decomposition import PCA
 
 from . import cohorts, db, queries
@@ -16,6 +17,10 @@ from . import cohorts, db, queries
 MAX_SAMPLE_PER_GROUP = 3000
 MAX_PCA_FEATURES = 12
 MAX_CORR_COLUMNS = 20
+MAX_SPECTRUM_ROWS = 300_000
+SPECTRUM_GRID = 256
+
+_trapz = getattr(np, "trapezoid", getattr(np, "trapz", None))
 
 
 def _group_sources(specs: list[dict[str, Any]], needed: list[str]):
@@ -214,6 +219,100 @@ def cohort_correlation(
                     k += 1
             series.append({**cohorts._cohort_summary(cohort), "matrix": matrix})
     return {"columns": targets, "cohorts": series, "overlaps": resolution["overlaps"]}
+
+
+def cohort_spectrum(
+    specs: list[dict[str, Any]],
+    signal: str,
+    order_by: str,
+    filters: list[dict[str, Any]] | None = None,
+    band: tuple[float, float] = (4.0, 8.0),
+) -> dict[str, Any]:
+    """信号の周波数分析 (パワースペクトル密度)。グループ間で振動特性を比較する。
+
+    各ログを時間順に並べ、時間列の間隔からサンプリング周波数を推定して
+    Welch 法で PSD を計算。ログごとの PSD を共通周波数軸へ補間して
+    グループ平均する。人体が不快に感じる帯域 (既定 4-8Hz) のエネルギーも返す。
+    """
+    if signal == order_by:
+        raise queries.QueryError("信号と時間列には別の列を指定してください")
+    resolution, sources = _group_sources(specs, [signal, order_by] + [f.get("column") for f in (filters or [])])
+    qs, qo = queries._quote(signal), queries._quote(order_by)
+
+    # スキーマ取得は DuckDB ロックの外で済ませておく (ロック内で再取得すると
+    # 同じ非再入ロックを二重取得してデッドロックするため)
+    plans = []  # (cohort名, time_expr, [(table, where, params), ...])
+    for cohort, _src, cols in sources:
+        if cols[signal]["kind"] != "numeric":
+            raise queries.QueryError("周波数分析には数値信号を指定してください")
+        if cols[order_by]["kind"] not in ("numeric", "temporal"):
+            raise queries.QueryError("時間列には数値列または日時列を指定してください")
+        time_expr = f"epoch({qo})" if cols[order_by]["kind"] == "temporal" else qo
+        members = []
+        for ds_id in cohort["dataset_ids"]:
+            table, dcols = queries._schema_map(ds_id)
+            where, params = queries._build_where(filters, dcols)
+            members.append((table, where, params))
+        plans.append((cohort["name"], time_expr, members))
+
+    per_dataset_psd: dict[str, list[tuple[np.ndarray, np.ndarray]]] = {}
+    nyquists: list[float] = []
+    with db.duck() as con:
+        for cohort_name, time_expr, members in plans:
+            psds = []
+            for table, where, params in members:
+                rows = con.execute(
+                    f"SELECT {time_expr} AS t, {qs} AS v FROM {queries._quote(table)}"
+                    f"{where or ' WHERE 1=1'} AND {qs} IS NOT NULL AND {qo} IS NOT NULL "
+                    f"ORDER BY {qo} LIMIT {MAX_SPECTRUM_ROWS}",
+                    params,
+                ).fetchall()
+                if len(rows) < 32:
+                    continue
+                arr = np.asarray(rows, dtype=float)
+                t, v = arr[:, 0], arr[:, 1]
+                dt = np.median(np.diff(t))
+                if not np.isfinite(dt) or dt <= 0:
+                    continue
+                fs = 1.0 / dt
+                nperseg = int(min(len(v), 1024))
+                freqs, psd = scipy_signal.welch(v, fs=fs, nperseg=nperseg, detrend="constant")
+                psds.append((freqs, psd))
+                nyquists.append(fs / 2)
+            per_dataset_psd[cohort_name] = psds
+
+    if not nyquists:
+        raise queries.QueryError("周波数分析に十分なデータがありません (等間隔サンプリングの時間列が必要です)")
+
+    # 共通周波数グリッド (0 〜 最小ナイキスト) へ補間してグループ平均
+    max_freq = float(min(nyquists))
+    grid = np.linspace(0.0, max_freq, SPECTRUM_GRID)
+    band_lo, band_hi = float(band[0]), float(band[1])
+    band_mask = (grid >= band_lo) & (grid <= band_hi)
+
+    series = []
+    for cohort in resolution["cohorts"]:
+        psds = per_dataset_psd.get(cohort["name"], [])
+        if not psds:
+            series.append({**cohorts._cohort_summary(cohort), "psd": [], "band_power": None})
+            continue
+        interpolated = [np.interp(grid, f, p, left=0.0, right=0.0) for f, p in psds]
+        mean_psd = np.mean(interpolated, axis=0)
+        total = float(_trapz(mean_psd, grid)) if grid.size > 1 else 0.0
+        band_power = float(_trapz(mean_psd[band_mask], grid[band_mask])) if band_mask.any() else 0.0
+        series.append({
+            **cohorts._cohort_summary(cohort),
+            "psd": [round(float(v), 8) for v in mean_psd],
+            "band_power": round(band_power, 8),
+            "band_ratio": round(band_power / total, 5) if total > 0 else None,
+        })
+    return {
+        "signal": signal,
+        "freqs": [round(float(f), 4) for f in grid],
+        "band": [band_lo, band_hi],
+        "cohorts": series,
+        "overlaps": resolution["overlaps"],
+    }
 
 
 def _num(v: Any) -> float | None:

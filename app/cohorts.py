@@ -10,7 +10,7 @@ from . import db, ingest, queries
 
 MAX_2D_BINS = 100
 MAX_EVENTS_PER_DATASET = 5000
-COHORT_METRICS = {"avg", "q50", "q75"}
+COHORT_METRICS = {"avg", "q50", "q75", "std", "max"}
 MAX_MULTI_SIGNALS = 20
 
 

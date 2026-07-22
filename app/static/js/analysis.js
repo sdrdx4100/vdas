@@ -44,6 +44,10 @@ export const AN_KINDS = {
     hint: "グループごとに信号間の相関行列 (ヒートマップ) を出します。信号どうしの関係の違いを比較できます。",
     controls: ["signals"],
   },
+  spectrum: {
+    hint: "加速度などの振動信号を周波数分析 (パワースペクトル) し、グループ間で比較します。乗り心地の悪さは人が敏感な帯域 (既定 4-8Hz) の振動エネルギーに現れます。時間列は等間隔サンプリングが必要です。",
+    controls: ["fsignal", "forder", "fband"],
+  },
 };
 
 state.an = state.an || { tags: new Set(), kind: "summary", filters: [], schemas: {}, schema: null };
@@ -146,6 +150,9 @@ function anFillColumns() {
   keep($("#an-esignal"), '<option value="">なし (経過時間の分布)</option>' + opts(numeric));
   keep($("#an-rx"), opts(numeric), /speed|km\/?h|車速|throttle|スロットル/i);
   keep($("#an-ry"), opts(numeric), /rpm|回転/i);
+  keep($("#an-fsignal"), opts(numeric), /accel|加速|振動|vib|jerk|z_g|y_g|x_g/i);
+  keep($("#an-forder"), opts(cols.filter((c) => c.kind === "numeric" || c.kind === "temporal")),
+    /time|timestamp|時刻|時間|elapsed/i);
   renderAnSignals(numeric);
 }
 
@@ -179,7 +186,8 @@ export function setAnalysisKind(kind) {
   $$("#an-kind .chart-kind").forEach((b) => b.classList.toggle("active", b.dataset.kind === kind));
   const wanted = new Set(AN_KINDS[kind].controls);
   for (const c of ["signal", "metric", "col", "x", "y", "bins", "tstate", "torder", "tdenom", "tscale",
-    "estate", "evalue", "eorder", "etime", "esignal", "rx", "ry", "signals", "norm"]) {
+    "estate", "evalue", "eorder", "etime", "esignal", "rx", "ry", "signals",
+    "fsignal", "forder", "fband", "norm"]) {
     $(`#an-${c}-wrap`).style.display = wanted.has(c) ? "" : "none";
   }
   $("#an-kind-hint").textContent = AN_KINDS[kind].hint;
@@ -195,7 +203,8 @@ $$("#an-kind .chart-kind").forEach((btn) => {
 ["#an-signal", "#an-metric", "#an-col", "#an-x", "#an-y", "#an-bins",
   "#an-tstate", "#an-torder", "#an-tdenom", "#an-tscale",
   "#an-estate", "#an-evalue", "#an-eorder", "#an-etime", "#an-esignal",
-  "#an-rx", "#an-ry", "#an-norm"].forEach((sel) =>
+  "#an-rx", "#an-ry", "#an-fsignal", "#an-forder", "#an-fbandlo", "#an-fbandhi",
+  "#an-norm"].forEach((sel) =>
   $(sel).addEventListener("change", anAuto));
 $("#an-run").addEventListener("click", () => runAnalysis());
 
@@ -290,12 +299,21 @@ export async function runAnalysis(auto = false) {
       const res = await post("/api/compare/cohorts/pca", { columns: signals });
       renderGroupChips(res);
       renderPcaResult(res);
-    } else {
+    } else if (kind === "correlation") {
       const signals = anSelectedSignals();
       const res = await post("/api/compare/cohorts/correlation",
         signals.length >= 2 ? { columns: signals } : {});
       renderGroupChips(res);
       renderCorrelationResult(res);
+    } else {
+      const res = await post("/api/compare/cohorts/spectrum", {
+        signal: $("#an-fsignal").value,
+        order_by: $("#an-forder").value,
+        band_low: +$("#an-fbandlo").value || 0,
+        band_high: +$("#an-fbandhi").value || 0,
+      });
+      renderGroupChips(res);
+      renderSpectrumResult(res);
     }
   } catch (e) {
     toast(`分析エラー: ${e.message}`, "error");
@@ -315,7 +333,7 @@ function renderGroupChips(res) {
   $("#an-stats").innerHTML = chips.join(" ");
 }
 
-const METRIC_LABEL = { avg: "平均", q50: "中央値", q75: "Q75" };
+const METRIC_LABEL = { avg: "平均", q50: "中央値", q75: "Q75", std: "標準偏差", max: "ピーク" };
 
 function renderSummaryResult(res) {
   const colors = seriesColors();
@@ -600,6 +618,43 @@ function renderCorrelationResult(res) {
   $("#an-table-wrap").hidden = true;
 }
 
+function renderSpectrumResult(res) {
+  const colors = seriesColors();
+  renderChart("an-chart", () => {
+    const traces = res.cohorts.filter((c) => c.psd.length).map((c, i) => ({
+      type: "scatter", mode: "lines", name: c.name,
+      x: res.freqs, y: c.psd, line: { width: 2, color: colors[i % colors.length] },
+      hovertemplate: `%{x:.2f} Hz<br>PSD %{y:.3g}<extra>%{fullData.name}</extra>`,
+    }));
+    const layout = baseLayout({
+      height: 480,
+      xaxis: Object.assign(baseLayout().xaxis, { title: { text: "周波数 (Hz)" } }),
+      yaxis: Object.assign(baseLayout().yaxis, { title: { text: `${res.signal} パワースペクトル密度` } }),
+      showlegend: true,
+    });
+    // 人体が不快に感じる帯域を帯で示す
+    layout.shapes = [{
+      type: "rect", xref: "x", yref: "paper",
+      x0: res.band[0], x1: res.band[1], y0: 0, y1: 1,
+      fillcolor: "rgba(224,73,72,0.10)", line: { width: 0 }, layer: "below",
+    }];
+    layout.annotations = [{
+      x: (res.band[0] + res.band[1]) / 2, y: 1, yref: "paper",
+      text: `不快帯域 ${res.band[0]}–${res.band[1]}Hz`, showarrow: false,
+      font: { size: 11, color: "var(--text-secondary)" }, yanchor: "bottom",
+    }];
+    Plotly.react("an-chart", traces, layout, PLOT_CONFIG);
+  });
+  // 帯域エネルギーの比較テーブル (乗り心地の指標)
+  const head = ["グループ", `不快帯域 ${res.band[0]}–${res.band[1]}Hz エネルギー`, "帯域比 (%)"];
+  $("#an-table thead").innerHTML = `<tr>${head.map((h) => `<th>${h}</th>`).join("")}</tr>`;
+  $("#an-table tbody").innerHTML = res.cohorts.map((c, i) =>
+    `<tr><td>${swatch(colors[i % colors.length])}<strong>${esc(c.name)}</strong></td>` +
+    `<td class="num">${c.band_power == null ? "—" : Number(c.band_power).toPrecision(4)}</td>` +
+    `<td class="num">${c.band_ratio == null ? "—" : (c.band_ratio * 100).toFixed(2)}</td></tr>`).join("");
+  $("#an-table-wrap").hidden = false;
+}
+
 // ---------- ビュー保存 ----------
 
 $("#an-save-view").addEventListener("click", async () => {
@@ -627,6 +682,8 @@ $("#an-save-view").addEventListener("click", async () => {
         esignal: $("#an-esignal").value || null,
         rx: $("#an-rx").value, ry: $("#an-ry").value,
         signals: anSelectedSignals(),
+        fsignal: $("#an-fsignal").value, forder: $("#an-forder").value,
+        fbandlo: +$("#an-fbandlo").value || 4, fbandhi: +$("#an-fbandhi").value || 8,
         norm: $("#an-norm").value,
         filters: activeFilters(state.an),
       },
@@ -668,6 +725,10 @@ export async function loadAnalysisView(view) {
     if (c.esignal != null) setIf("#an-esignal", c.esignal);
     setIf("#an-rx", c.rx);
     setIf("#an-ry", c.ry);
+    setIf("#an-fsignal", c.fsignal);
+    setIf("#an-forder", c.forder);
+    if (c.fbandlo != null) $("#an-fbandlo").value = c.fbandlo;
+    if (c.fbandhi != null) $("#an-fbandhi").value = c.fbandhi;
     if (Array.isArray(c.signals) && c.signals.length) {
       $("#an-signals").querySelectorAll("input").forEach((el) => {
         el.checked = c.signals.includes(el.value);

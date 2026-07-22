@@ -329,6 +329,15 @@ class CohortHistogram2DRequest(CohortResolveRequest):
     filters: list[FilterSpec] = Field(default_factory=list)
 
 
+class CohortEventsRequest(CohortResolveRequest):
+    state_column: str
+    value: str
+    order_by: str
+    time_column: str | None = None
+    secondary_column: str | None = None
+    filters: list[FilterSpec] = Field(default_factory=list)
+
+
 class CohortTransitionsRequest(CohortResolveRequest):
     state_column: str
     order_by: str
@@ -389,6 +398,20 @@ def post_cohort_histogram2d(req: CohortHistogram2DRequest):
         req.y,
         req.bins_x,
         req.bins_y,
+        [filter_spec.model_dump() for filter_spec in req.filters],
+    )
+
+
+@router.post("/compare/cohorts/events")
+def post_cohort_events(req: CohortEventsRequest):
+    return _wrap(
+        cohorts.compare_events,
+        _cohort_dicts(req),
+        req.state_column,
+        req.value,
+        req.order_by,
+        req.time_column,
+        req.secondary_column,
         [filter_spec.model_dump() for filter_spec in req.filters],
     )
 

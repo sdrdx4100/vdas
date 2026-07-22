@@ -225,3 +225,74 @@ def test_cohort_api_validates_at_least_one_group() -> None:
         )
 
     assert response.status_code == 422
+
+
+EVENT_CSV_A = """time,shiftinprocess,rpm
+0,0,800
+1,1,1000
+2,1,1200
+3,0,1400
+4,0,1500
+5,1,2000
+6,0,2100
+"""
+
+EVENT_CSV_B = """time,shiftinprocess,rpm
+0,0,700
+1,1,900
+2,1,1000
+3,1,1100
+4,0,1300
+"""
+
+
+def test_cohort_events_extracts_runs_and_durations(ingest_csv) -> None:
+    ingest_csv(EVENT_CSV_A, filename="a.csv", tags=["A社"])
+    ingest_csv(EVENT_CSV_B, filename="b.csv", tags=["B社"])
+    result = cohorts.compare_events(specs(), "shiftinprocess", "1", "time", time_column="time")
+
+    by_name = {c["name"]: c for c in result["cohorts"]}
+    # A: shiftinprocess=1 の区間は time 1-2 (duration 1) と time 5 (duration 0) の2件
+    assert by_name["A"]["event_count"] == 2
+    assert sorted(by_name["A"]["durations"]) == [0.0, 1.0]
+    # B: time 1-3 の1区間 (duration 2)
+    assert by_name["B"]["event_count"] == 1
+    assert by_name["B"]["durations"] == [2.0]
+    assert by_name["B"]["summary"]["p90"] == 2.0
+
+
+def test_cohort_events_secondary_signal_average(ingest_csv) -> None:
+    ingest_csv(EVENT_CSV_A, filename="a.csv", tags=["A社"])
+    ingest_csv(EVENT_CSV_B, filename="b.csv", tags=["B社"])
+    result = cohorts.compare_events(
+        specs(), "shiftinprocess", "1", "time", time_column="time", secondary_column="rpm"
+    )
+    a = next(c for c in result["cohorts"] if c["name"] == "A")
+    # 最初の区間 (rpm 1000,1200 の平均=1100) が含まれる
+    assert 1100.0 in a["secondary_values"]
+
+
+def test_cohort_events_rejects_empty_value(ingest_csv) -> None:
+    ingest_csv(EVENT_CSV_A, filename="a.csv", tags=["A社"])
+    ingest_csv(EVENT_CSV_B, filename="b.csv", tags=["B社"])
+    with pytest.raises(queries.QueryError):
+        cohorts.compare_events(specs(), "shiftinprocess", "", "time")
+
+
+def test_cohort_events_endpoint(ingest_csv) -> None:
+    ingest_csv(EVENT_CSV_A, filename="a.csv", tags=["A社"])
+    ingest_csv(EVENT_CSV_B, filename="b.csv", tags=["B社"])
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/compare/cohorts/events",
+            json={
+                "cohorts": specs(),
+                "state_column": "shiftinprocess",
+                "value": "1",
+                "order_by": "time",
+                "time_column": "time",
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert {c["name"] for c in data["cohorts"]} == {"A", "B"}

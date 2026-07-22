@@ -8,6 +8,7 @@ import numpy as np
 from . import db, ingest, queries
 
 MAX_2D_BINS = 100
+MAX_EVENTS_PER_DATASET = 5000
 COHORT_METRICS = {"avg", "q50", "q75"}
 MAX_MULTI_SIGNALS = 20
 
@@ -294,6 +295,124 @@ def compare_histogram2d(
         "y": y,
         "x_edges": [min_x + width_x * index for index in range(bins_x + 1)],
         "y_edges": [min_y + width_y * index for index in range(bins_y + 1)],
+        "cohorts": cohort_series,
+        "overlaps": resolution["overlaps"],
+    }
+
+
+def compare_events(
+    specs: list[dict[str, Any]],
+    state_column: str,
+    value: str,
+    order_by: str,
+    time_column: str | None = None,
+    secondary_column: str | None = None,
+    filters: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """状態列が特定の値になっている連続区間をイベントとして抽出し、経過時間を比較する。
+
+    例: shiftinprocess=1 の区間 → 変速に要した時間の分布を A社 / B社 で比較。
+    経過時間は time_column (数値なら差、日時なら秒差) で計測する。
+    secondary_column を指定すると、イベント中のその信号の平均も併せて返す。
+    """
+    value = str(value).strip()
+    if not value:
+        raise queries.QueryError("イベントとみなす状態の値を指定してください")
+    if state_column == order_by:
+        raise queries.QueryError("状態列と並び順列には別の列を指定してください")
+    time_column = time_column or order_by
+
+    resolution = resolve_cohorts(specs)
+    dataset_ids = _unique_dataset_ids(resolution["cohorts"])
+    required = [state_column, order_by, time_column]
+    if secondary_column:
+        required.append(secondary_column)
+    tables = queries._compare_tables(dataset_ids, *dict.fromkeys(required), minimum=1)
+
+    per_dataset: dict[str, dict[str, Any]] = {}
+    for dataset_id, table, columns in tables:
+        if columns[order_by]["kind"] not in ("numeric", "temporal"):
+            raise queries.QueryError("並び順には数値列または日時列を指定してください")
+        if columns[time_column]["kind"] == "temporal":
+            time_expr = f"epoch({queries._quote(time_column)})"
+        elif columns[time_column]["kind"] == "numeric":
+            time_expr = queries._quote(time_column)
+        else:
+            raise queries.QueryError("時間列には数値列または日時列を指定してください")
+        if secondary_column and columns[secondary_column]["kind"] != "numeric":
+            raise queries.QueryError("イベント中の信号には数値列を指定してください")
+
+        where, params = queries._build_where(filters, columns)
+        qstate = queries._quote(state_column)
+        qorder = queries._quote(order_by)
+        source_where = (
+            f"{where or ' WHERE 1=1'} AND {qstate} IS NOT NULL AND {qorder} IS NOT NULL"
+        )
+        # gaps-and-islands: 状態値の連続区間を1イベントにまとめる
+        sql = (
+            "WITH ordered AS ("
+            f" SELECT CAST({qstate} AS VARCHAR) AS state_value, {time_expr} AS time_value,"
+            f" {queries._quote(secondary_column) if secondary_column else 'NULL'} AS secondary_value,"
+            f" row_number() OVER (ORDER BY {qorder}, rowid) AS row_index"
+            f" FROM {queries._quote(table)}{source_where}"
+            "), runs AS ("
+            " SELECT *, row_index - row_number() OVER ("
+            " PARTITION BY state_value ORDER BY row_index) AS run_id"
+            " FROM ordered"
+            ") SELECT min(time_value), max(time_value), count(*), avg(secondary_value) "
+            "FROM runs WHERE state_value = ? GROUP BY run_id ORDER BY 1 "
+            f"LIMIT {MAX_EVENTS_PER_DATASET}"
+        )
+        with db.duck() as con:
+            rows = con.execute(sql, [*params, value]).fetchall()
+            source_rows = con.execute(
+                f"SELECT count(*) FROM {queries._quote(table)}{source_where}", params
+            ).fetchone()[0]
+        events = [
+            {
+                "start": start,
+                "duration": float(end - start) if start is not None and end is not None else None,
+                "rows": row_count,
+                "secondary": float(secondary) if secondary is not None else None,
+            }
+            for start, end, row_count, secondary in rows
+        ]
+        per_dataset[dataset_id] = {"events": events, "source_rows": source_rows}
+
+    cohort_series = []
+    for cohort in resolution["cohorts"]:
+        events = [
+            event
+            for dataset_id in cohort["dataset_ids"]
+            for event in per_dataset[dataset_id]["events"]
+        ]
+        durations = [e["duration"] for e in events if e["duration"] is not None]
+        source_rows = sum(
+            per_dataset[dataset_id]["source_rows"] for dataset_id in cohort["dataset_ids"]
+        )
+        summary = _describe_dataset_values(durations)
+        summary["p90"] = (
+            float(np.quantile(np.asarray(durations, dtype=float), 0.9)) if durations else None
+        )
+        cohort_series.append(
+            {
+                **_cohort_summary(cohort),
+                "event_count": len(events),
+                "events_per_1k_rows": (
+                    round(len(events) * 1000 / source_rows, 3) if source_rows else None
+                ),
+                "durations": durations,
+                "secondary_values": [
+                    e["secondary"] for e in events if e["duration"] is not None
+                ],
+                "summary": summary,
+            }
+        )
+    return {
+        "state_column": state_column,
+        "value": value,
+        "time_column": time_column,
+        "secondary_column": secondary_column,
         "cohorts": cohort_series,
         "overlaps": resolution["overlaps"],
     }

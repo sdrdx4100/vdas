@@ -329,6 +329,7 @@
         <button class="chart-kind" data-kind="share"><span class="ck-icon">🍰</span>構成比</button>
         <button class="chart-kind" data-kind="region"><span class="ck-icon">🗺️</span>動作領域</button>
         <button class="chart-kind" data-kind="transitions"><span class="ck-icon">🔀</span>状態遷移・頻度</button>
+        <button class="chart-kind" data-kind="events"><span class="ck-icon">⏱️</span>区間 (イベント) 分析</button>
       </div>
       <p class="hint" id="an-kind-hint" style="margin:8px 0 0;"></p>
 
@@ -367,6 +368,21 @@
         </label>
         <label class="field" id="an-tscale-wrap">基準量
           <input type="number" id="an-tscale" value="1" min="0.000001" step="any" style="width:100px;">
+        </label>
+        <label class="field" id="an-estate-wrap">状態列
+          <select id="an-estate" style="min-width:140px;"></select>
+        </label>
+        <label class="field" id="an-evalue-wrap">イベントとみなす値
+          <input type="text" id="an-evalue" value="1" style="width:90px;">
+        </label>
+        <label class="field" id="an-eorder-wrap">並び順
+          <select id="an-eorder" style="min-width:140px;"></select>
+        </label>
+        <label class="field" id="an-etime-wrap">経過時間の計測列
+          <select id="an-etime" style="min-width:140px;"></select>
+        </label>
+        <label class="field" id="an-esignal-wrap">イベント中の信号 (散布図)
+          <select id="an-esignal"><option value="">なし (経過時間の分布)</option></select>
         </label>
         <label class="field" id="an-norm-wrap">正規化
           <select id="an-norm">

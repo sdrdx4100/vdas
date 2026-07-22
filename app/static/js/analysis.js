@@ -28,6 +28,10 @@ export const AN_KINDS = {
     hint: "ギア段などの状態変化を遷移イベントとして数え、行数・時間・距離あたりの頻度で比較します。",
     controls: ["tstate", "torder", "tdenom", "tscale", "norm"],
   },
+  events: {
+    hint: "状態列が指定の値になっている連続区間を1イベントとして抽出し、経過時間を比較します。例: shiftinprocess=1 の区間 = 変速に要した時間。「イベント中の信号」を選ぶと 経過時間 × 信号平均 の散布図になります。",
+    controls: ["estate", "evalue", "eorder", "etime", "esignal"],
+  },
 };
 
 state.an = state.an || { tags: new Set(), kind: "summary", filters: [], schemas: {}, schema: null };
@@ -123,6 +127,11 @@ function anFillColumns() {
   keep($("#an-torder"), opts(cols.filter((c) => c.kind === "numeric" || c.kind === "temporal")),
     /time|timestamp|時刻|時間|elapsed/i);
   keep($("#an-tdenom"), '<option value="">1,000行あたり</option>' + opts(numeric));
+  const orderable = cols.filter((c) => c.kind === "numeric" || c.kind === "temporal");
+  keep($("#an-estate"), opts(discrete), /shift|inprocess|gear|ギア|state|状態|flag|mode|モード/i);
+  keep($("#an-eorder"), opts(orderable), /time|timestamp|時刻|時間|elapsed/i);
+  keep($("#an-etime"), opts(orderable), /elapsed|time|timestamp|時刻|時間/i);
+  keep($("#an-esignal"), '<option value="">なし (経過時間の分布)</option>' + opts(numeric));
 }
 
 // ---------- ② 分析の種類 ----------
@@ -132,7 +141,8 @@ export function setAnalysisKind(kind) {
   state.an.kind = kind;
   $$("#an-kind .chart-kind").forEach((b) => b.classList.toggle("active", b.dataset.kind === kind));
   const wanted = new Set(AN_KINDS[kind].controls);
-  for (const c of ["signal", "metric", "col", "x", "y", "bins", "tstate", "torder", "tdenom", "tscale", "norm"]) {
+  for (const c of ["signal", "metric", "col", "x", "y", "bins", "tstate", "torder", "tdenom", "tscale",
+    "estate", "evalue", "eorder", "etime", "esignal", "norm"]) {
     $(`#an-${c}-wrap`).style.display = wanted.has(c) ? "" : "none";
   }
   $("#an-kind-hint").textContent = AN_KINDS[kind].hint;
@@ -146,7 +156,8 @@ $$("#an-kind .chart-kind").forEach((btn) => {
 });
 
 ["#an-signal", "#an-metric", "#an-col", "#an-x", "#an-y", "#an-bins",
-  "#an-tstate", "#an-torder", "#an-tdenom", "#an-tscale", "#an-norm"].forEach((sel) =>
+  "#an-tstate", "#an-torder", "#an-tdenom", "#an-tscale",
+  "#an-estate", "#an-evalue", "#an-eorder", "#an-etime", "#an-esignal", "#an-norm"].forEach((sel) =>
   $(sel).addEventListener("change", anAuto));
 $("#an-run").addEventListener("click", () => runAnalysis());
 
@@ -211,7 +222,7 @@ export async function runAnalysis(auto = false) {
         { x: $("#an-x").value, y: $("#an-y").value, bins_x: bins, bins_y: bins });
       renderGroupChips(res);
       renderRegionResult(res);
-    } else {
+    } else if (kind === "transitions") {
       const res = await post("/api/compare/cohorts/transitions", {
         state_column: $("#an-tstate").value,
         order_by: $("#an-torder").value,
@@ -220,6 +231,16 @@ export async function runAnalysis(auto = false) {
       });
       renderGroupChips(res);
       renderTransitionsResult(res);
+    } else {
+      const res = await post("/api/compare/cohorts/events", {
+        state_column: $("#an-estate").value,
+        value: $("#an-evalue").value,
+        order_by: $("#an-eorder").value,
+        time_column: $("#an-etime").value || null,
+        secondary_column: $("#an-esignal").value || null,
+      });
+      renderGroupChips(res);
+      renderEventsResult(res);
     }
   } catch (e) {
     toast(`分析エラー: ${e.message}`, "error");
@@ -381,6 +402,54 @@ function renderTransitionsResult(res) {
   });
 }
 
+function renderEventsResult(res) {
+  const colors = seriesColors();
+  const secondary = res.secondary_column;
+  renderChart("an-chart", () => {
+    let traces;
+    if (secondary) {
+      // 経過時間 × イベント中の信号平均 の散布図
+      traces = res.cohorts.map((c, i) => ({
+        type: "scattergl", mode: "markers", name: c.name,
+        x: c.durations, y: c.secondary_values,
+        marker: { color: colors[i % colors.length], size: 7, opacity: 0.7 },
+        hovertemplate: `経過 %{x:.3f}<br>${esc(secondary)} 平均 %{y}<extra>%{fullData.name}</extra>`,
+      }));
+    } else {
+      traces = res.cohorts.map((c, i) => ({
+        type: "box", name: c.name, y: c.durations,
+        boxpoints: c.durations.length <= 400 ? "all" : "outliers",
+        jitter: 0.4, pointpos: 0, boxmean: true,
+        marker: { color: colors[i % colors.length], size: 5, opacity: 0.6 },
+        line: { width: 2 },
+      }));
+    }
+    Plotly.react("an-chart", traces, baseLayout({
+      height: 480,
+      xaxis: Object.assign(baseLayout().xaxis, secondary
+        ? { title: { text: `イベント経過時間 (${res.time_column})` } }
+        : { type: "category" }),
+      yaxis: Object.assign(baseLayout().yaxis, {
+        title: { text: secondary ? `イベント中の ${secondary} 平均`
+          : `${res.state_column}=${res.value} の経過時間 (${res.time_column})` },
+      }),
+      showlegend: !!secondary && res.cohorts.length > 1,
+    }), PLOT_CONFIG);
+  });
+
+  const head = ["グループ", "イベント数", "1,000行あたり", "平均", "中央値", "P90", "最大"];
+  $("#an-table thead").innerHTML = `<tr>${head.map((h) => `<th>${h}</th>`).join("")}</tr>`;
+  $("#an-table tbody").innerHTML = res.cohorts.map((c, i) => {
+    const s2 = c.summary;
+    return `<tr><td>${swatch(colors[i % colors.length])}<strong>${esc(c.name)}</strong></td>` +
+      `<td class="num">${fmtNum(c.event_count)}</td>` +
+      `<td class="num">${fmtVal(c.events_per_1k_rows)}</td>` +
+      `<td class="num">${fmtVal(s2.mean)}</td><td class="num">${fmtVal(s2.median)}</td>` +
+      `<td class="num">${fmtVal(s2.p90)}</td><td class="num">${fmtVal(s2.max)}</td></tr>`;
+  }).join("");
+  $("#an-table-wrap").hidden = false;
+}
+
 // ---------- ビュー保存 ----------
 
 $("#an-save-view").addEventListener("click", async () => {
@@ -403,6 +472,9 @@ $("#an-save-view").addEventListener("click", async () => {
         bins: +$("#an-bins").value || 40,
         tstate: $("#an-tstate").value, torder: $("#an-torder").value,
         tdenom: $("#an-tdenom").value || null, tscale: +$("#an-tscale").value || 1,
+        estate: $("#an-estate").value, evalue: $("#an-evalue").value,
+        eorder: $("#an-eorder").value, etime: $("#an-etime").value,
+        esignal: $("#an-esignal").value || null,
         norm: $("#an-norm").value,
         filters: activeFilters(state.an),
       },
@@ -437,6 +509,11 @@ export async function loadAnalysisView(view) {
     if (c.bins) $("#an-bins").value = c.bins;
     setIf("#an-tstate", c.tstate);
     setIf("#an-torder", c.torder);
+    setIf("#an-estate", c.estate);
+    if (c.evalue != null) $("#an-evalue").value = c.evalue;
+    setIf("#an-eorder", c.eorder);
+    setIf("#an-etime", c.etime);
+    if (c.esignal != null) setIf("#an-esignal", c.esignal);
     if (c.tdenom != null) setIf("#an-tdenom", c.tdenom);
     if (c.tscale) $("#an-tscale").value = c.tscale;
     if (c.norm) $("#an-norm").value = c.norm === "pooled" ? "pooled" : "mean";

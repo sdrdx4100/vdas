@@ -8,7 +8,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
-from . import clustering, cohorts, db, ingest, queries
+from . import clustering, cohorts, db, ingest, methods, queries
 
 router = APIRouter(prefix="/api")
 
@@ -400,6 +400,40 @@ def post_cohort_histogram2d(req: CohortHistogram2DRequest):
         req.bins_y,
         [filter_spec.model_dump() for filter_spec in req.filters],
     )
+
+
+class CohortRegressionRequest(CohortResolveRequest):
+    x: str
+    y: str
+    filters: list[FilterSpec] = Field(default_factory=list)
+
+
+@router.post("/compare/cohorts/regression")
+def post_cohort_regression(req: CohortRegressionRequest):
+    return _wrap(methods.cohort_regression, _cohort_dicts(req), req.x, req.y,
+                 [f.model_dump() for f in req.filters])
+
+
+class CohortPcaRequest(CohortResolveRequest):
+    columns: list[str] = Field(min_length=2, max_length=12)
+    filters: list[FilterSpec] = Field(default_factory=list)
+
+
+@router.post("/compare/cohorts/pca")
+def post_cohort_pca(req: CohortPcaRequest):
+    return _wrap(methods.cohort_pca, _cohort_dicts(req), req.columns,
+                 [f.model_dump() for f in req.filters])
+
+
+class CohortCorrelationRequest(CohortResolveRequest):
+    columns: list[str] | None = None
+    filters: list[FilterSpec] = Field(default_factory=list)
+
+
+@router.post("/compare/cohorts/correlation")
+def post_cohort_correlation(req: CohortCorrelationRequest):
+    return _wrap(methods.cohort_correlation, _cohort_dicts(req), req.columns,
+                 [f.model_dump() for f in req.filters])
 
 
 @router.post("/compare/cohorts/events")

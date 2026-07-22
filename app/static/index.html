@@ -330,6 +330,9 @@
         <button class="chart-kind" data-kind="region"><span class="ck-icon">🗺️</span>動作領域</button>
         <button class="chart-kind" data-kind="transitions"><span class="ck-icon">🔀</span>状態遷移・頻度</button>
         <button class="chart-kind" data-kind="events"><span class="ck-icon">⏱️</span>区間 (イベント) 分析</button>
+        <button class="chart-kind" data-kind="regression"><span class="ck-icon">📉</span>回帰・トレンド</button>
+        <button class="chart-kind" data-kind="pca"><span class="ck-icon">🧭</span>主成分分析 (PCA)</button>
+        <button class="chart-kind" data-kind="correlation"><span class="ck-icon">🔗</span>相関</button>
       </div>
       <p class="hint" id="an-kind-hint" style="margin:8px 0 0;"></p>
 
@@ -384,6 +387,16 @@
         <label class="field" id="an-esignal-wrap">イベント中の信号 (散布図)
           <select id="an-esignal"><option value="">なし (経過時間の分布)</option></select>
         </label>
+        <label class="field" id="an-rx-wrap">X (説明変数)
+          <select id="an-rx" style="min-width:150px;"></select>
+        </label>
+        <label class="field" id="an-ry-wrap">Y (目的変数)
+          <select id="an-ry" style="min-width:150px;"></select>
+        </label>
+        <div class="field" id="an-signals-wrap" style="min-width:260px;">
+          <span>使用する信号 (2つ以上)</span>
+          <div class="col-picker" id="an-signals" style="max-height:150px; margin-top:2px;"></div>
+        </div>
         <label class="field" id="an-norm-wrap">正規化
           <select id="an-norm">
             <option value="mean">データセット均等</option>

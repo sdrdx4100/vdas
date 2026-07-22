@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
+from scipy import stats as scipy_stats
 
 from . import db, ingest, queries
 
@@ -676,10 +677,26 @@ def _compare_dataset_values(left: list[float], right: list[float]) -> dict[str, 
         (np.count_nonzero(pair_differences > 0) - np.count_nonzero(pair_differences < 0))
         / pair_differences.size
     )
+
+    # ログ本数を1標本とした有意差検定 (少数標本では検出力が低い点に注意)
+    t_p = None
+    mw_p = None
+    if len(left) >= 2 and len(right) >= 2:
+        if np.var(left_array) > 0 or np.var(right_array) > 0:
+            t_p = float(scipy_stats.ttest_ind(right_array, left_array, equal_var=False).pvalue)
+        try:
+            mw_p = float(
+                scipy_stats.mannwhitneyu(right_array, left_array, alternative="two-sided").pvalue
+            )
+        except ValueError:
+            mw_p = None
+
     return {
         "difference": difference,
         "difference_percent": difference * 100 / abs(left_mean) if left_mean else None,
         "ci95": ci95,
         "hedges_g": hedges_g,
         "cliffs_delta": cliffs_delta,
+        "t_test_p": t_p,
+        "mann_whitney_p": mw_p,
     }

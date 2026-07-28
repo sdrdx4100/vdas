@@ -233,6 +233,7 @@ def map_track(dataset_id: str, signals: list[str] | None = None,
     # --- 座標列の候補を決める ---
     # 明示指定 (lat/lon) → 名前ベースの緯度経度 → GPS_x/y/z 座標軸、の順。
     # 役割 (どちらが緯度/経度か・度かメートルか) は後段で値から判定する。
+    axes_map: dict[str, str] = {}
     if lat_col and lon_col:
         for col in (lat_col, lon_col):
             if col not in gps_colmap:
@@ -247,6 +248,8 @@ def map_track(dataset_id: str, signals: list[str] | None = None,
                 "列を手動で指定してください")
         coord_cols = cols
         roles_fixed = (kind == "latlon")
+        if kind == "axes":
+            axes_map = detect_coord_axes(gps_schema["columns"])  # {'x': 列, 'y': 列, 'z': 列}
 
     # --- 波形の信号列・X 軸列の確定 (すべて信号データセット側) ---
     signals = [s for s in (signals or []) if s]
@@ -297,15 +300,19 @@ def map_track(dataset_id: str, signals: list[str] | None = None,
     coord_at = {c: [_jsonable(r[len(sel_cols) + 1 + i]) for r in rows]
                 for i, c in enumerate(coord_cols)}
 
-    # --- 使う2軸と、緯度経度(度)かローカル座標(m)かを値から決める ---
-    # 役割固定 (明示指定 / 緯度経度名) ならその2列。GPS_x/y/z など軸が3つ
-    # あるときは、まず「度らしい2列の組」を探す (単位混在に強い)。無ければ
-    # 同一単位とみなし広がりの大きい上位2軸を水平面として選ぶ。
-    geographic = False
-    if roles_fixed:
+    # --- 使う2軸を決める ---
+    # GPS_x/y/z 軸の慣習: x=経度(東), y=緯度(北), z=高度。x と y が揃っていれば
+    # それを水平面 (経度=x, 緯度=y) とし、高度 z は使わない。それ以外は値から判定。
+    lon_hint = lat_hint = None
+    if axes_map and "x" in axes_map and "y" in axes_map:
+        a_name, b_name = axes_map["x"], axes_map["y"]
+        lon_hint, lat_hint = axes_map["x"], axes_map["y"]
+    elif roles_fixed:
+        # 明示指定 (a=緯度, b=経度) / 緯度経度名
         a_name, b_name = coord_cols[0], coord_cols[1]
-        geographic = _looks_like_degrees(_num(coord_at[a_name]), _num(coord_at[b_name]))
+        lat_hint, lon_hint = coord_cols[0], coord_cols[1]
     else:
+        # 度らしい2列の組を探し、無ければ広がりの大きい上位2軸を水平面にする
         geo_pair = None
         for i in range(len(coord_cols)):
             for j in range(i + 1, len(coord_cols)):
@@ -317,7 +324,6 @@ def map_track(dataset_id: str, signals: list[str] | None = None,
                 break
         if geo_pair:
             a_name, b_name = geo_pair
-            geographic = True
         else:
             spread = {c: (max(_num(v)) - min(_num(v))) if _num(v) else 0.0
                       for c, v in coord_at.items()}
@@ -327,6 +333,7 @@ def map_track(dataset_id: str, signals: list[str] | None = None,
 
     a_vals, b_vals = coord_at[a_name], coord_at[b_name]
     a_num, b_num = _num(a_vals), _num(b_vals)
+    geographic = _looks_like_degrees(a_num, b_num)
 
     result: dict[str, Any] = {
         "signal_dataset": signal_ds,
@@ -341,8 +348,18 @@ def map_track(dataset_id: str, signals: list[str] | None = None,
     }
 
     if geographic:
-        # 緯度経度 → 実地図タイル上に描く
-        lat_name, lon_name = _assign_latlon(a_name, a_num, b_name, b_num)
+        # 緯度経度 → 実地図タイル上に描く。
+        # 軸名の慣習 (x=経度, y=緯度 など) が分かっていればそれを優先し、
+        # 値域と明らかに矛盾するとき (緯度側が±90を超える) だけ入れ替える。
+        if lat_hint and lon_hint:
+            lat_over90 = max(map(abs, _num(coord_at[lat_hint]))) > 90
+            lon_ok90 = max(map(abs, _num(coord_at[lon_hint]))) <= 90
+            if lat_over90 and lon_ok90:
+                lat_name, lon_name = lon_hint, lat_hint  # 逆に付いていたので入れ替え
+            else:
+                lat_name, lon_name = lat_hint, lon_hint
+        else:
+            lat_name, lon_name = _assign_latlon(a_name, a_num, b_name, b_num)
         lat_vals, lon_vals = coord_at[lat_name], coord_at[lon_name]
         lat_clean, lon_clean = _num(lat_vals), _num(lon_vals)
         center = {"lat": sum(lat_clean) / len(lat_clean), "lon": sum(lon_clean) / len(lon_clean)}

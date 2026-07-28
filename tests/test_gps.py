@@ -120,17 +120,16 @@ def test_map_track_filter_keeps_alignment(ingest_csv) -> None:
     assert res["lat"] == [35.02, 35.03, 35.04]
 
 
-# GPS_x/GPS_z が緯度・経度 (度)、GPS_y は標高 (メートル) のケース
-# (日本近辺: 緯度35, 経度139。標高は水平面より広がりが大きく水平面から外れる)
-GPS_XZ_DEG_CSV = """GPS_x,GPS_y,GPS_z
-139.00,100,35.00
-139.01,140,35.01
-139.02,90,35.02
-139.03,180,35.03
-139.04,210,35.04
+# 実データの慣習: GPS_x=東経(経度), GPS_y=北緯(緯度), GPS_z=高度(メートル)
+GPS_XYZ_DEG_CSV = """GPS_x,GPS_y,GPS_z
+139.00,35.00,12.0
+139.01,35.01,14.0
+139.02,35.02,11.0
+139.03,35.03,18.0
+139.04,35.04,21.0
 """
 
-# GPS_x/GPS_z がローカル座標 (メートル) のケース
+# 座標がローカル座標 (メートル) のケース (GPS_x, GPS_z のみ)
 GPS_XZ_M_CSV = """GPS_x,GPS_z
 0,0
 1200,300
@@ -159,15 +158,22 @@ def test_gps_dataset_recognized_by_axes(ingest_csv) -> None:
 
 def test_map_track_axes_degrees_geographic(ingest_csv) -> None:
     sig = ingest_csv(SIG_CSV, filename="jp.csv")
-    ingest_csv(GPS_XZ_DEG_CSV, filename="jp.csv")
+    ingest_csv(GPS_XYZ_DEG_CSV, filename="jp.csv")
     res = gps.map_track(sig["id"], signals=["speed"])
     assert res["mode"] == "geographic"
-    # GPS_x(139)=経度, GPS_z(35)=緯度 と値域から割り当てられる。
-    # GPS_y は広がりが小さいので水平面から除外される
-    assert res["lat_col"] == "GPS_z"
+    # 慣習どおり GPS_x=経度, GPS_y=緯度。高度 GPS_z は水平面に使わない
+    assert res["lat_col"] == "GPS_y"
     assert res["lon_col"] == "GPS_x"
     assert res["lat"] == [35.0, 35.01, 35.02, 35.03, 35.04]
     assert res["lon"][0] == 139.0
+
+
+def test_map_track_axes_prefers_xy_over_altitude(ingest_csv) -> None:
+    # 高度 GPS_z の値が小さく緯度に見えても、慣習どおり水平面は x, y を使う
+    sig = ingest_csv(SIG_CSV, filename="jp2.csv")
+    ingest_csv(GPS_XYZ_DEG_CSV, filename="jp2.csv")
+    res = gps.map_track(sig["id"], signals=["speed"])
+    assert (res["lon_col"], res["lat_col"]) == ("GPS_x", "GPS_y")
 
 
 def test_map_track_axes_meters_planar(ingest_csv) -> None:

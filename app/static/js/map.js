@@ -196,6 +196,20 @@ $("#mp-lat").addEventListener("change", mapAutoPlot);
 $("#mp-lon").addEventListener("change", mapAutoPlot);
 $("#mp-color").addEventListener("change", mapAutoPlot);
 $("#mp-maxpoints").addEventListener("change", mapAutoPlot);
+$("#mp-sync-mode").addEventListener("change", () => {
+  updateSyncHint();
+  plotMap(true);
+});
+
+function updateSyncHint() {
+  const course = $("#mp-sync-mode").value === "course";
+  $("#mp-sync-hint").textContent = course
+    ? "GPS実測点からコース進捗を求め、欠損区間は入口・出口間を推定します。"
+    : "A/Bのシーク位置を基準に時間軸を合わせます。";
+  $("#mp-seek-hint").textContent = course
+    ? "片方を動かすと同じコース進捗へ自動追従"
+    : "A/Bを別々に動かして同じ地点を選択";
+}
 
 // ---------- 波形に出す信号の選択 ----------
 
@@ -268,13 +282,15 @@ export async function plotMap(auto = false) {
   setMapLoading(true);
   try {
     const filters = activeFilters(state.mp);
+    const selectedA = selectedSignalList();
+    const signalRequestA = withSpeedAssist(state.mp.schema, selectedA);
     const requestTrack = (id, body) => api(`/api/gps/${id}/track`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
     const requestA = requestTrack(dsId, {
-      signals: selectedSignalList(),
+      signals: signalRequestA.signals,
       color_signal: dsIdB ? null : ($("#mp-color").value || null),
       gps_id: $("#mp-gps").value || null,
       lat_col: $("#mp-lat").value || null,
@@ -283,12 +299,14 @@ export async function plotMap(auto = false) {
       max_points: +$("#mp-maxpoints").value || 5000,
     });
     let requestB = null;
+    let signalRequestB = null;
     if (dsIdB) {
       const columnsB = new Set((state.mp.schemaB?.columns || []).map((c) => c.name));
-      const signalsB = selectedSignalList().filter((name) => columnsB.has(name));
+      const signalsB = selectedA.filter((name) => columnsB.has(name));
+      signalRequestB = withSpeedAssist(state.mp.schemaB, signalsB);
       const filtersB = filters.filter((f) => columnsB.has(f.column));
       requestB = requestTrack(dsIdB, {
-        signals: signalsB,
+        signals: signalRequestB.signals,
         color_signal: null,
         gps_id: $("#mp-gps-b").value || null,
         lat_col: null,
@@ -298,6 +316,8 @@ export async function plotMap(auto = false) {
       });
     }
     const [res, resB] = await Promise.all([requestA, requestB]);
+    detachSpeedAssist(res, signalRequestA.assist);
+    if (resB) detachSpeedAssist(resB, signalRequestB?.assist);
     if (resB && res.mode !== resB.mode) {
       throw new Error("走行 A と B の座標形式が異なるため重ねて表示できません。");
     }
@@ -313,6 +333,10 @@ export async function plotMap(auto = false) {
     $("#mp-meta").innerHTML =
       `<span class="chip accent">走行 A: ${esc(res.signal_dataset.name)} / ${fmtNum(res.returned_rows)} 点</span> ` +
       (resB ? `<span class="chip">走行 B: ${esc(resB.signal_dataset.name)} / ${fmtNum(resB.returned_rows)} 点</span> ` : "") +
+      (view.runs.some((run) => run.course.estimatedCount)
+        ? `<span class="chip">GPS補間 A:${fmtNum(view.runs[0].course.estimatedCount)}点` +
+          (resB ? ` / B:${fmtNum(view.runs[1].course.estimatedCount)}点` : "") + "</span> "
+        : "") +
       `<span class="chip">GPS: ${esc(res.gps_dataset.name)}</span> ${modeChip}`;
     renderChart("mp-map", () => renderMap(view));
     renderChart("mp-wave", () => renderWave(view));
@@ -351,19 +375,34 @@ function reflectResolvedCoords(res) {
 
 function buildTrackView(primary, secondary = null) {
   const colors = seriesColors();
+  const primaryTimes = timelineSeconds(primary);
   const runs = [
-    { key: "a", label: "走行 A", res: primary, times: timelineSeconds(primary), color: colors[0] },
+    { key: "a", label: "走行 A", res: primary, times: primaryTimes, color: colors[0],
+      course: buildCourseAxis(primary, primaryTimes) },
   ];
   if (secondary) {
+    const secondaryTimes = timelineSeconds(secondary);
     runs.push({ key: "b", label: "走行 B", res: secondary,
-      times: timelineSeconds(secondary), color: colors[1] });
+      times: secondaryTimes, color: colors[1],
+      course: buildCourseAxis(secondary, secondaryTimes) });
+    if (runs.every((run) => run.course.usable)) {
+      runs[1].course.localProgress = runs[1].course.progress;
+      runs[1].course.progress = matchCourseProgress(runs[0], runs[1]);
+    }
   }
   const view = {
     primary, secondary, runs, mode: primary.mode, offsetB: 0,
     timeUnit: primary.x && secondary?.x ? "秒" : "サンプル",
+    syncMode: secondary ? $("#mp-sync-mode").value : "manual",
   };
+  if (view.syncMode === "course" && runs.some((run) => !run.course.usable)) {
+    view.syncMode = "manual";
+    $("#mp-sync-mode").value = "manual";
+    updateSyncHint();
+    toast("GPS実測点が不足しているため、時間・手動同期に切り替えました。", "error");
+  }
   const alignment = $("#mp-alignment");
-  alignment.hidden = !secondary;
+  alignment.hidden = !secondary || view.syncMode === "course";
   if (secondary) {
     const duration = Math.max(runs[0].times.at(-1) || 0, runs[1].times.at(-1) || 0, 60);
     const limit = Math.ceil(duration);
@@ -378,6 +417,21 @@ function buildTrackView(primary, secondary = null) {
     updateAlignmentLabel(0, view.timeUnit);
   }
   return view;
+}
+
+function withSpeedAssist(schema, selected) {
+  const speed = schema?.columns.find((column) => column.kind === "numeric" &&
+    /speed|vehicle.*spd|車速|km.?h/i.test(column.name))?.name;
+  return {
+    signals: speed && !selected.includes(speed) ? [...selected, speed] : selected,
+    assist: speed && !selected.includes(speed) ? speed : null,
+  };
+}
+
+function detachSpeedAssist(res, assist) {
+  if (!assist || !(assist in res.signals)) return;
+  res.sync_speed_values = res.signals[assist];
+  delete res.signals[assist];
 }
 
 function timelineSeconds(res) {
@@ -405,6 +459,160 @@ function timelineSeconds(res) {
   return values.map((_, i) => i);
 }
 
+function buildCourseAxis(res, times) {
+  const geographic = res.mode === "geographic";
+  const sourceX = geographic ? res.lon : res.px;
+  const sourceY = geographic ? res.lat : res.py;
+  const x = sourceX.map(toFiniteNumber);
+  const y = sourceY.map(toFiniteNumber);
+  const hasRealOrigin = geographic && x.some((value, i) =>
+    Number.isFinite(value) && Number.isFinite(y[i]) &&
+    (Math.abs(value) > 0.000001 || Math.abs(y[i]) > 0.000001));
+  const valid = x.map((value, i) => Number.isFinite(value) && Number.isFinite(y[i]) &&
+    (!geographic || (Math.abs(y[i]) <= 90 && Math.abs(value) <= 180)) &&
+    (!hasRealOrigin || Math.abs(value) > 0.000001 || Math.abs(y[i]) > 0.000001));
+  const speed = findSpeedSeries(res);
+  if (speed) {
+    let lastMovingAnchor = valid.findIndex(Boolean);
+    for (let i = lastMovingAnchor + 1; i < valid.length; i += 1) {
+      if (!valid[i]) continue;
+      const unchanged = Math.abs(x[i] - x[lastMovingAnchor]) < 1e-10 &&
+        Math.abs(y[i] - y[lastMovingAnchor]) < 1e-10;
+      if (unchanged && Number(speed[i]) > 0.5) {
+        valid[i] = false;
+      } else {
+        lastMovingAnchor = i;
+      }
+    }
+  }
+  const estimated = valid.map((isValid) => !isValid);
+  const filledX = [...x];
+  const filledY = [...y];
+  const anchors = valid.map((isValid, i) => isValid ? i : -1).filter((i) => i >= 0);
+
+  if (!anchors.length) {
+    const fallback = res.index.map((_, i) => res.index.length > 1 ? i / (res.index.length - 1) : 0);
+    return { progress: fallback, filledX, filledY, estimated,
+      estimatedCount: estimated.length, usable: false };
+  }
+
+  const first = anchors[0];
+  for (let i = 0; i < first; i += 1) {
+    filledX[i] = filledX[first];
+    filledY[i] = filledY[first];
+  }
+  for (let a = 0; a < anchors.length - 1; a += 1) {
+    const start = anchors[a];
+    const end = anchors[a + 1];
+    if (end === start + 1) continue;
+    const fractions = gapFractions(res, times, start, end);
+    for (let i = start + 1; i < end; i += 1) {
+      const fraction = fractions[i - start];
+      filledX[i] = filledX[start] + (filledX[end] - filledX[start]) * fraction;
+      filledY[i] = filledY[start] + (filledY[end] - filledY[start]) * fraction;
+    }
+  }
+  const last = anchors.at(-1);
+  for (let i = last + 1; i < filledX.length; i += 1) {
+    filledX[i] = filledX[last];
+    filledY[i] = filledY[last];
+  }
+
+  const distance = [0];
+  for (let i = 1; i < filledX.length; i += 1) {
+    const segment = geographic
+      ? haversineMeters(filledY[i - 1], filledX[i - 1], filledY[i], filledX[i])
+      : Math.hypot(filledX[i] - filledX[i - 1], filledY[i] - filledY[i - 1]);
+    distance.push(distance.at(-1) + (Number.isFinite(segment) ? segment : 0));
+  }
+  const total = distance.at(-1);
+  const progress = total > 0
+    ? distance.map((value) => value / total)
+    : distance.map((_, i) => distance.length > 1 ? i / (distance.length - 1) : 0);
+  return {
+    progress, filledX, filledY, estimated,
+    estimatedCount: estimated.filter(Boolean).length,
+    usable: anchors.length >= 2,
+  };
+}
+
+function gapFractions(res, times, start, end) {
+  const speed = findSpeedSeries(res);
+  const weights = [];
+  for (let i = start + 1; i <= end; i += 1) {
+    const dt = Math.max(0.000001, (times[i] ?? i) - (times[i - 1] ?? (i - 1)));
+    const velocity = speed
+      ? Math.max(0, (Number(speed[i - 1]) + Number(speed[i])) / 2)
+      : 1;
+    weights.push(Number.isFinite(velocity) && velocity > 0 ? velocity * dt : dt);
+  }
+  const total = weights.reduce((sum, value) => sum + value, 0);
+  let cumulative = 0;
+  return [0, ...weights.map((weight) => {
+    cumulative += weight;
+    return total > 0 ? cumulative / total : cumulative / weights.length;
+  })];
+}
+
+function findSpeedSeries(res) {
+  if (res.sync_speed_values) return res.sync_speed_values;
+  const entry = Object.entries(res.signals).find(([name]) =>
+    /speed|vehicle.*spd|車速|km.?h/i.test(name));
+  return entry?.[1] || null;
+}
+
+function toFiniteNumber(value) {
+  if (value == null || value === "") return NaN;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : NaN;
+}
+
+function haversineMeters(lat1, lon1, lat2, lon2) {
+  const toRad = Math.PI / 180;
+  const dLat = (lat2 - lat1) * toRad;
+  const dLon = (lon2 - lon1) * toRad;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * toRad) * Math.cos(lat2 * toRad) * Math.sin(dLon / 2) ** 2;
+  return 6371000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(Math.max(0, 1 - a)));
+}
+
+function matchCourseProgress(referenceRun, targetRun) {
+  const reference = referenceRun.course;
+  const target = targetRun.course;
+  const refLength = reference.progress.length;
+  const targetLength = target.progress.length;
+  if (!refLength || !targetLength) return target.progress;
+  const geographic = referenceRun.res.mode === "geographic";
+  let previous = nearestCoursePoint(reference, target, 0, 0, refLength - 1, geographic);
+  const matched = [reference.progress[previous]];
+  const typicalAdvance = Math.max(1, refLength / Math.max(1, targetLength));
+  const searchAhead = Math.max(40, Math.ceil(typicalAdvance * 30));
+  for (let i = 1; i < targetLength; i += 1) {
+    const end = Math.min(refLength - 1, previous + searchAhead);
+    previous = nearestCoursePoint(reference, target, i, previous, end, geographic);
+    matched.push(reference.progress[previous]);
+  }
+  return matched;
+}
+
+function nearestCoursePoint(reference, target, targetIndex, start, end, geographic) {
+  let best = start;
+  let bestDistance = Infinity;
+  const tx = target.filledX[targetIndex];
+  const ty = target.filledY[targetIndex];
+  const lonScale = geographic ? Math.cos(ty * Math.PI / 180) : 1;
+  for (let i = start; i <= end; i += 1) {
+    const dx = (reference.filledX[i] - tx) * lonScale;
+    const dy = reference.filledY[i] - ty;
+    const distance = dx * dx + dy * dy;
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = i;
+    }
+  }
+  return best;
+}
+
 function renderMap(view) {
   if (view.mode === "planar") return renderPlanar(view);
   return renderGeographic(view);
@@ -417,9 +625,11 @@ function renderGeographic(view) {
   for (const [runIndex, run] of view.runs.entries()) {
     const res = run.res;
     const hasColor = !comparison && res.color_signal && res.color_values;
+    const actualLat = res.lat.map((value, i) => run.course.estimated[i] ? null : value);
+    const actualLon = res.lon.map((value, i) => run.course.estimated[i] ? null : value);
     traces.push({
       type: "scattermap", mode: hasColor ? "markers" : "lines+markers",
-      lat: res.lat, lon: res.lon, name: run.label,
+      lat: actualLat, lon: actualLon, name: run.label,
       line: { width: 3, color: run.color },
       marker: hasColor
         ? { size: 7, color: res.color_values, colorscale: "Viridis", showscale: true,
@@ -429,9 +639,24 @@ function renderGeographic(view) {
       hovertemplate: `<b>${run.label}</b><br>緯度 %{lat:.5f}<br>経度 %{lon:.5f}` +
         (hasColor ? `<br>${esc(res.color_signal)} %{marker.color}` : "") + "<extra></extra>",
     });
+    if (run.course.estimatedCount) {
+      const estimated = estimatedTrackCoords(run.course.filledX, run.course.filledY,
+        run.course.estimated);
+      traces.push({
+        type: "scattermap", mode: "lines+markers",
+        lat: estimated.y, lon: estimated.x, name: `${run.label} GPS補間`,
+        line: { width: 4, color: run.color },
+        marker: { size: 5, color: run.color },
+        opacity: 0.45,
+        customdata: estimated.indices.map((pointIndex) =>
+          pointIndex == null ? null : ({ runIndex, pointIndex })),
+        hovertemplate: `<b>${run.label}（GPS補間）</b><br>推定位置<extra></extra>`,
+        showlegend: comparison,
+      });
+    }
     traces.push({
       type: "scattermap", mode: "markers",
-      lat: [res.lat[0]], lon: [res.lon[0]],
+      lat: [run.course.filledY[0]], lon: [run.course.filledX[0]],
       marker: { size: 16, color: run.color, line: { width: 2, color: "#fff" } },
       hoverinfo: "skip", showlegend: false, visible: false,
       meta: { highlightFor: runIndex },
@@ -451,9 +676,11 @@ function renderPlanar(view) {
   for (const [runIndex, run] of view.runs.entries()) {
     const res = run.res;
     const hasColor = !comparison && res.color_signal && res.color_values;
+    const actualX = res.px.map((value, i) => run.course.estimated[i] ? null : value);
+    const actualY = res.py.map((value, i) => run.course.estimated[i] ? null : value);
     traces.push({
       type: "scattergl", mode: hasColor ? "markers" : "lines+markers",
-      x: res.px, y: res.py, name: run.label,
+      x: actualX, y: actualY, name: run.label,
       line: { width: 2, color: run.color },
       marker: hasColor
         ? { size: 6, color: res.color_values, colorscale: "Viridis", showscale: true,
@@ -463,8 +690,24 @@ function renderPlanar(view) {
       hovertemplate: `<b>${run.label}</b><br>${esc(res.px_col)} %{x}<br>${esc(res.py_col)} %{y}` +
         (hasColor ? `<br>${esc(res.color_signal)} %{marker.color}` : "") + "<extra></extra>",
     });
+    if (run.course.estimatedCount) {
+      const estimated = estimatedTrackCoords(run.course.filledX, run.course.filledY,
+        run.course.estimated);
+      traces.push({
+        type: "scattergl", mode: "lines+markers",
+        x: estimated.x, y: estimated.y, name: `${run.label} GPS補間`,
+        line: { width: 3, color: run.color, dash: "dot" },
+        marker: { size: 5, color: run.color },
+        opacity: 0.5,
+        customdata: estimated.indices.map((pointIndex) =>
+          pointIndex == null ? null : ({ runIndex, pointIndex })),
+        hovertemplate: `<b>${run.label}（GPS補間）</b><br>推定位置<extra></extra>`,
+        showlegend: comparison,
+      });
+    }
     traces.push({
-      type: "scattergl", mode: "markers", x: [res.px[0]], y: [res.py[0]],
+      type: "scattergl", mode: "markers",
+      x: [run.course.filledX[0]], y: [run.course.filledY[0]],
       marker: { size: 15, color: run.color, line: { width: 2, color: "#fff" } },
       hoverinfo: "skip", showlegend: false, visible: false,
       meta: { highlightFor: runIndex },
@@ -479,6 +722,19 @@ function renderPlanar(view) {
   Plotly.react("mp-map", traces, layout, PLOT_CONFIG);
 }
 
+function estimatedTrackCoords(x, y, estimated) {
+  const outX = [];
+  const outY = [];
+  const indices = [];
+  for (let i = 0; i < x.length; i += 1) {
+    const belongs = estimated[i] || estimated[i - 1] || estimated[i + 1];
+    outX.push(belongs ? x[i] : null);
+    outY.push(belongs ? y[i] : null);
+    indices.push(belongs ? i : null);
+  }
+  return { x: outX, y: outY, indices };
+}
+
 // 波形: 信号ごとに帯を積み重ね、X軸 (時間/サンプル) を共有
 function renderWave(view) {
   const el = $("#mp-wave");
@@ -490,7 +746,9 @@ function renderWave(view) {
   }
   el.innerHTML = "";
   const comparison = view.runs.length > 1;
-  const xlabel = comparison ? `経過${view.timeUnit === "秒" ? "時間" : "位置"} (${view.timeUnit}・走行 B はオフセット適用)` :
+  const xlabel = comparison && view.syncMode === "course"
+    ? "コース進捗 (%)"
+    : comparison ? `経過${view.timeUnit === "秒" ? "時間" : "位置"} (${view.timeUnit}・走行 B はオフセット適用)` :
     (view.primary.x || "サンプル番号");
   const k = signals.length;
   const rowHeight = 130;
@@ -515,7 +773,9 @@ function renderWave(view) {
       if (!(name in run.res.signals)) return;
       const offset = runIndex === 1 ? view.offsetB : 0;
       const xvals = comparison
-        ? run.times.map((value) => value + offset)
+        ? (view.syncMode === "course"
+          ? run.course.progress.map((value) => value * 100)
+          : run.times.map((value) => value + offset))
         : (run.res.x_values || run.res.index);
       traces.push({
         type: "scattergl", mode: "lines",
@@ -566,7 +826,7 @@ function wireLinkedCursor(view) {
   waveEl.on?.("plotly_hover", (ev) => {
     const point = ev.points?.[0]?.customdata;
     if (!point) return;
-    showLinkedAtTime(view, masterTimeForPoint(view, point));
+    showLinkedForPoint(view, point);
   });
   waveEl.on?.("plotly_unhover", restorePlaybackPosition);
   waveEl.on?.("plotly_click", (ev) => seekFromPlotEvent(view, ev));
@@ -575,7 +835,7 @@ function wireLinkedCursor(view) {
   mapEl.on?.("plotly_hover", (ev) => {
     const point = ev.points?.[0]?.customdata;
     if (!point) return;
-    showLinkedAtTime(view, masterTimeForPoint(view, point));
+    showLinkedForPoint(view, point);
   });
   mapEl.on?.("plotly_unhover", restorePlaybackPosition);
   mapEl.on?.("plotly_click", (ev) => seekFromPlotEvent(view, ev));
@@ -586,10 +846,11 @@ function highlightMapPoint(view, runIndex, idx) {
   if (!mapEl.data) return;
   const run = view.runs[runIndex];
   const res = run.res;
-  const hi = runIndex * 2 + 1;
+  const hi = mapEl.data.findIndex((trace) => trace.meta?.highlightFor === runIndex);
+  if (hi < 0) return;
   const update = res.mode === "planar"
-    ? { x: [[res.px[idx]]], y: [[res.py[idx]]], visible: true }
-    : { lat: [[res.lat[idx]]], lon: [[res.lon[idx]]], visible: true };
+    ? { x: [[run.course.filledX[idx]]], y: [[run.course.filledY[idx]]], visible: true }
+    : { lat: [[run.course.filledY[idx]]], lon: [[run.course.filledX[idx]]], visible: true };
   Plotly.restyle("mp-map", update, [hi]);
 }
 
@@ -739,13 +1000,19 @@ function setPlaybackIndex(index) {
   playback.index = Math.max(0, Math.min(last, Math.round(index)));
   const masterTime = view.runs[0].times[playback.index];
   if (view.secondary) {
-    const rawTimeB = masterTime - view.offsetB;
-    playback.indexB = nearestIndex(view.runs[1].times, rawTimeB);
+    playback.indexB = view.syncMode === "course"
+      ? nearestIndex(view.runs[1].course.progress,
+        view.runs[0].course.progress[playback.index])
+      : nearestIndex(view.runs[1].times, masterTime - view.offsetB);
   }
   $("#mp-play-seek").value = String(playback.index);
   $("#mp-play-seek-b").value = String(playback.indexB);
   updatePlaybackPositionLabels(view, masterTime);
-  showLinkedAtTime(view, masterTime);
+  if (view.syncMode === "course" && view.secondary) {
+    showLinkedAtCourseProgress(view, view.runs[0].course.progress[playback.index]);
+  } else {
+    showLinkedAtTime(view, masterTime);
+  }
 }
 
 function seekRunIndependently(runIndex, index) {
@@ -757,6 +1024,18 @@ function seekRunIndependently(runIndex, index) {
     playback.indexB = clampIndex(index, view.secondary.index.length);
   }
   if (view.secondary) {
+    if (view.syncMode === "course") {
+      const sourceRun = view.runs[runIndex];
+      const sourceIndex = runIndex === 0 ? playback.index : playback.indexB;
+      const progress = sourceRun.course.progress[sourceIndex];
+      playback.index = nearestIndex(view.runs[0].course.progress, progress);
+      playback.indexB = nearestIndex(view.runs[1].course.progress, progress);
+      $("#mp-play-seek").value = String(playback.index);
+      $("#mp-play-seek-b").value = String(playback.indexB);
+      updatePlaybackPositionLabels(view, view.runs[0].times[playback.index]);
+      showLinkedAtCourseProgress(view, progress);
+      return;
+    }
     setAlignmentFromSelectedPositions(playback.index, playback.indexB);
     applyAlignment();
   } else {
@@ -804,15 +1083,40 @@ function showLinkedAtTime(view, masterTime) {
   }
 }
 
+function showLinkedAtCourseProgress(view, progress) {
+  view.runs.forEach((run, runIndex) => {
+    const idx = nearestIndex(run.course.progress, progress);
+    highlightMapPoint(view, runIndex, idx);
+  });
+  if (Object.keys(view.primary.signals).length) {
+    Plotly.relayout("mp-wave", { shapes: [verticalLine(progress * 100)] });
+  }
+}
+
+function showLinkedForPoint(view, point) {
+  if (view.syncMode === "course" && view.secondary) {
+    const run = view.runs[point.runIndex];
+    showLinkedAtCourseProgress(view, run.course.progress[point.pointIndex]);
+  } else {
+    showLinkedAtTime(view, masterTimeForPoint(view, point));
+  }
+}
+
 function hideMapPoint(runIndex) {
   const mapEl = $("#mp-map");
   if (!mapEl.data) return;
-  Plotly.restyle("mp-map", { visible: false }, [runIndex * 2 + 1]);
+  const hi = mapEl.data.findIndex((trace) => trace.meta?.highlightFor === runIndex);
+  if (hi >= 0) Plotly.restyle("mp-map", { visible: false }, [hi]);
 }
 
 function restorePlaybackPosition() {
   if (playback.res) {
-    showLinkedAtTime(playback.res, playback.res.runs[0].times[playback.index]);
+    if (playback.res.syncMode === "course" && playback.res.secondary) {
+      showLinkedAtCourseProgress(playback.res,
+        playback.res.runs[0].course.progress[playback.index]);
+    } else {
+      showLinkedAtTime(playback.res, playback.res.runs[0].times[playback.index]);
+    }
   }
 }
 
@@ -844,18 +1148,24 @@ function nearestIndex(values, target) {
 }
 
 function updatePlaybackPositionLabels(view, masterTime) {
-  $("#mp-play-position").textContent = runPositionLabel(view.primary, playback.index);
+  $("#mp-play-position").textContent = runPositionLabel(view.runs[0], playback.index);
   if (!view.secondary) return;
+  if (view.syncMode === "course") {
+    $("#mp-play-position-b").textContent = runPositionLabel(view.runs[1], playback.indexB);
+    return;
+  }
   const rawTimeB = masterTime - view.offsetB;
   const inRange = rawTimeB >= view.runs[1].times[0] && rawTimeB <= view.runs[1].times.at(-1);
   $("#mp-play-position-b").textContent = inRange
-    ? runPositionLabel(view.secondary, playback.indexB)
+    ? runPositionLabel(view.runs[1], playback.indexB)
     : "範囲外";
 }
 
-function runPositionLabel(res, index) {
+function runPositionLabel(run, index) {
+  const res = run.res;
   const value = (res.x_values || res.index)[index];
-  return `${formatPositionValue(value)}  (${index + 1} / ${res.index.length})`;
+  const estimate = run.course.estimated[index] ? "・GPS推定" : "";
+  return `${formatPositionValue(value)}  (${index + 1} / ${res.index.length}${estimate})`;
 }
 
 function formatPositionValue(value) {
@@ -883,6 +1193,10 @@ export async function loadMapView(view) {
   if (config.lon_col) $("#mp-lon").value = config.lon_col;
   if (config.color_signal) $("#mp-color").value = config.color_signal;
   if (config.max_points) $("#mp-maxpoints").value = config.max_points;
+  if (config.sync_mode) {
+    $("#mp-sync-mode").value = config.sync_mode;
+    updateSyncHint();
+  }
   if (config.dataset_id_b) {
     $("#mp-dataset-b").value = config.dataset_id_b;
     $("#mp-dataset-b").dispatchEvent(new Event("change"));
@@ -922,6 +1236,7 @@ $("#mp-save-view").addEventListener("click", async () => {
         dataset_id_b: $("#mp-dataset-b").value || null,
         gps_id_b: $("#mp-gps-b").value || null,
         offset_b: Number($("#mp-align-offset").value) || 0,
+        sync_mode: $("#mp-sync-mode").value,
         lat_col: $("#mp-lat").value || null,
         lon_col: $("#mp-lon").value || null,
         filters: activeFilters(state.mp),

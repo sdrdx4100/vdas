@@ -479,6 +479,15 @@
         </label>
       </div>
       <div id="mp-pair-status-b" style="margin:4px 0 0; font-size:12px; color:var(--text-secondary);"></div>
+      <div class="controls-row" style="margin-top:10px;">
+        <label class="field">比較同期方式
+          <select id="mp-sync-mode">
+            <option value="manual">時間・手動位置合わせ</option>
+            <option value="course">GPSコース位置（欠損区間は推定）</option>
+          </select>
+        </label>
+        <span class="hint" id="mp-sync-hint">A/Bのシーク位置を基準に時間軸を合わせます。</span>
+      </div>
 
       <h3>波形に表示する信号 (下部グラフ)</h3>
       <div class="controls-row" style="margin-bottom:8px;">
@@ -518,7 +527,7 @@
           <input id="mp-play-seek-b" type="range" min="0" max="0" value="0" step="1"
                  disabled aria-label="走行Bの再生位置">
           <output id="mp-play-position-b" for="mp-play-seek-b">— / —</output>
-          <span class="hint">A/Bを別々に動かして同じ地点を選択</span>
+          <span class="hint" id="mp-seek-hint">A/Bを別々に動かして同じ地点を選択</span>
         </div>
       </div>
       <div class="map-alignment" id="mp-alignment" hidden>

@@ -8,7 +8,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
-from . import clustering, cohorts, db, ingest, methods, queries
+from . import clustering, cohorts, db, gps, ingest, methods, queries
 
 router = APIRouter(prefix="/api")
 
@@ -477,6 +477,36 @@ def post_cohort_transitions(req: CohortTransitionsRequest):
     )
 
 
+# ---------- GPS・地図 ----------
+
+@router.get("/gps/pairs")
+def get_gps_pairs():
+    return _wrap(gps.gps_pairs)
+
+
+@router.get("/gps/datasets")
+def get_gps_datasets():
+    return _wrap(gps.list_gps_datasets)
+
+
+class MapTrackRequest(BaseModel):
+    signals: list[str] = []
+    color_signal: str | None = None
+    x: str | None = None
+    gps_id: str | None = None
+    lat_col: str | None = None
+    lon_col: str | None = None
+    filters: list[FilterSpec] = []
+    max_points: int | None = None
+
+
+@router.post("/gps/{dataset_id}/track")
+def post_map_track(dataset_id: str, req: MapTrackRequest):
+    return _wrap(gps.map_track, dataset_id, req.signals, req.color_signal, req.x,
+                 req.gps_id, req.lat_col, req.lon_col,
+                 [f.model_dump() for f in req.filters], req.max_points)
+
+
 # ---------- 保存ビュー (可視化状態・条件の保存) ----------
 
 class SavedViewCreate(BaseModel):
@@ -496,8 +526,8 @@ def list_views():
 
 @router.post("/views")
 def create_view(req: SavedViewCreate):
-    if req.kind not in ("timeseries", "stats", "compare", "explore"):
-        raise HTTPException(status_code=400, detail="kind は timeseries / stats / compare / explore を指定してください")
+    if req.kind not in ("timeseries", "stats", "compare", "explore", "map"):
+        raise HTTPException(status_code=400, detail="kind は timeseries / stats / compare / explore / map を指定してください")
     view_id = uuid.uuid4().hex[:12]
     db.meta_execute(
         "INSERT INTO saved_views (id, name, kind, dataset_id, config) VALUES (?, ?, ?, ?, ?)",

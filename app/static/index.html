@@ -35,6 +35,10 @@
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="10" height="10" rx="1.5"/><path d="M7 17h9a1 1 0 0 0 1-1V7"/></svg>
     自由分析
   </button>
+  <button class="nav-item" data-page="map">
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M7.5 3 3 4.7v12.3l4.5-1.7 5 1.7 4.5-1.7V3l-4.5 1.7-5-1.7Z"/><path d="M7.5 3v12.3M12.5 4.7V17"/></svg>
+    GPS・地図
+  </button>
   <button class="nav-item" data-page="cluster">
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="2.2"/><circle cx="14.5" cy="8" r="2.2"/><circle cx="9" cy="14.5" r="2.2"/><path d="M7.8 7.4l4.6 0M7 8.2l1.2 4.2M13.2 9.8l-3 3.4" stroke-dasharray="1.5 1.8"/></svg>
     クラスタリング
@@ -433,6 +437,60 @@
       <div id="an-table-wrap" class="table-wrap" style="margin-top:12px;" hidden>
         <table class="data" id="an-table"><thead></thead><tbody></tbody></table>
       </div>
+    </div>
+  </section>
+
+  <!-- ================== GPS・地図 ================== -->
+  <section class="page" id="page-map">
+    <div class="page-header">
+      <h1>GPS・地図</h1>
+      <p>GPS ログ (緯度・経度) と信号ログを行位置で対応づけ、上部に走行軌跡の地図、下部に信号波形を表示します。地図・波形どちらかにカーソルを合わせると、もう一方の対応位置が連動して光ります。GPS ファイルは同名データから自動でペア判定します。</p>
+    </div>
+
+    <div class="card">
+      <div class="controls-row">
+        <label class="field">信号データセット
+          <select id="mp-dataset" style="min-width:240px;"></select>
+        </label>
+        <label class="field">GPS データセット
+          <select id="mp-gps" style="min-width:220px;"><option value="">自動 (同名から判定)</option></select>
+        </label>
+        <label class="field">緯度列
+          <select id="mp-lat" style="min-width:130px;"><option value="">自動</option></select>
+        </label>
+        <label class="field">経度列
+          <select id="mp-lon" style="min-width:130px;"><option value="">自動</option></select>
+        </label>
+        <label class="field">最大表示点数
+          <input type="number" id="mp-maxpoints" value="5000" min="100" max="50000" step="100" style="width:110px;">
+        </label>
+        <button class="btn" id="mp-plot" title="手動で再描画">🔄 更新</button>
+        <button class="btn" id="mp-save-view">ビューを保存</button>
+      </div>
+      <div id="mp-pair-status" style="margin:4px 0 0; font-size:12px; color:var(--text-secondary);"></div>
+
+      <h3>波形に表示する信号 (下部グラフ)</h3>
+      <div class="controls-row" style="margin-bottom:8px;">
+        <input type="search" id="mp-col-search" placeholder="信号名で絞り込み…" style="flex:1; max-width:320px;">
+        <span id="mp-selection-summary" class="selection-summary" aria-live="polite">0 信号選択中</span>
+        <button class="btn subtle" id="mp-clear-selection" type="button">選択解除</button>
+        <label class="field">地図の色分け信号
+          <select id="mp-color" style="min-width:170px;"><option value="">なし (単色の軌跡)</option></select>
+        </label>
+      </div>
+      <div class="col-picker" id="mp-cols"></div>
+
+      <h3>フィルタ条件 (信号データに適用)</h3>
+      <div id="mp-filters"></div>
+      <button class="btn subtle" id="mp-add-filter">＋ 条件を追加</button>
+    </div>
+
+    <div class="card">
+      <div id="mp-meta" style="margin-bottom:8px;"></div>
+      <div class="chart" id="mp-map" style="height:420px;"></div>
+    </div>
+    <div class="card">
+      <div class="chart tall" id="mp-wave"></div>
     </div>
   </section>
 

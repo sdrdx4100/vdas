@@ -75,7 +75,10 @@ $("#mp-dataset").addEventListener("change", async () => {
   if (pair) {
     $("#mp-gps").value = pair.gps.id;
     await loadGpsSchema(pair.lat_col, pair.lon_col);
-    setPairStatus(`✅ GPS データ「${pair.gps.name}」を自動ペア (${esc(pair.lat_col)} / ${esc(pair.lon_col)})`, "ok");
+    const cols = pair.lat_col && pair.lon_col
+      ? ` (${esc(pair.lat_col)} / ${esc(pair.lon_col)})`
+      : ` (座標列: ${(pair.coord_cols || []).map(esc).join(", ")} — 値から自動判定)`;
+    setPairStatus(`✅ GPS データ「${esc(pair.gps.name)}」を自動ペア${cols}`, "ok");
   } else {
     $("#mp-gps").value = "";
     await loadGpsSchema();
@@ -130,9 +133,12 @@ $("#mp-gps").addEventListener("change", async () => {
   const gpsId = $("#mp-gps").value;
   const g = gpsDatasets.find((d) => d.dataset.id === gpsId);
   if (g) {
-    $("#mp-lat").value = g.lat_col;
-    $("#mp-lon").value = g.lon_col;
-    setPairStatus(`GPS データ「${esc(g.dataset.name)}」を使用 (${esc(g.lat_col)} / ${esc(g.lon_col)})`, "ok");
+    if (g.lat_col) $("#mp-lat").value = g.lat_col;
+    if (g.lon_col) $("#mp-lon").value = g.lon_col;
+    const cols = g.lat_col && g.lon_col
+      ? ` (${esc(g.lat_col)} / ${esc(g.lon_col)})`
+      : ` (座標列: ${(g.coord_cols || []).map(esc).join(", ")} — 値から自動判定)`;
+    setPairStatus(`GPS データ「${esc(g.dataset.name)}」を使用${cols}`, "ok");
   }
   plotMap(true);
 });
@@ -224,10 +230,15 @@ export async function plotMap(auto = false) {
     });
     if (requestId !== mpRequestId) return;
     state.mp.track = res;
+    // 自動判定された座標列・モードを選択欄と案内に反映する
+    reflectResolvedCoords(res);
+    const modeChip = res.mode === "planar"
+      ? `<span class="chip">平面座標 (${esc(res.px_col)} / ${esc(res.py_col)})</span>`
+      : `<span class="chip">地図 (緯度 ${esc(res.lat_col)} / 経度 ${esc(res.lon_col)})</span>`;
     $("#mp-meta").innerHTML =
       `<span class="chip accent">${fmtNum(res.returned_rows)} 点表示</span> ` +
       `<span class="chip">全 ${fmtNum(res.total_rows)} 行${res.stride > 1 ? ` / ${res.stride} 行ごとに間引き` : ""}</span> ` +
-      `<span class="chip">GPS: ${esc(res.gps_dataset.name)}</span>`;
+      `<span class="chip">GPS: ${esc(res.gps_dataset.name)}</span> ${modeChip}`;
     renderChart("mp-map", () => renderMap(res));
     renderChart("mp-wave", () => renderWave(res));
     wireLinkedCursor(res);
@@ -253,36 +264,75 @@ function setMapLoading(loading) {
 
 const HIGHLIGHT_COLOR = "#e3008c";
 
+// バックエンドが値から決めた座標列・モードを選択欄に反映する
+function reflectResolvedCoords(res) {
+  if (res.mode === "geographic") {
+    if (res.lat_col && $(`#mp-lat option[value="${CSS.escape(res.lat_col)}"]`)) $("#mp-lat").value = res.lat_col;
+    if (res.lon_col && $(`#mp-lon option[value="${CSS.escape(res.lon_col)}"]`)) $("#mp-lon").value = res.lon_col;
+  }
+}
+
 function renderMap(res) {
+  if (res.mode === "planar") return renderPlanar(res);
+  return renderGeographic(res);
+}
+
+// 緯度経度 → 実地図タイル上に軌跡を描く
+function renderGeographic(res) {
   const colors = seriesColors();
   const hasColor = res.color_signal && res.color_values;
   const track = {
     type: "scattermap", mode: hasColor ? "markers" : "lines+markers",
-    lat: res.lat, lon: res.lon,
-    name: "軌跡",
+    lat: res.lat, lon: res.lon, name: "軌跡",
     line: { width: 3, color: colors[0] },
     marker: hasColor
       ? { size: 7, color: res.color_values, colorscale: "Viridis", showscale: true,
           colorbar: { title: { text: res.color_signal, side: "right" }, thickness: 12 } }
       : { size: 4, color: colors[0] },
     customdata: res.index.map((_, i) => i),
-    hovertemplate: `緯度 %{lat:.5f}<br>経度 %{lon:.5f}` +
+    hovertemplate: "緯度 %{lat:.5f}<br>経度 %{lon:.5f}" +
       (hasColor ? `<br>${esc(res.color_signal)} %{marker.color}` : "") + "<extra></extra>",
   };
-  // 連動ハイライト用の1点トレース (最後に置く = 最上位)
   const highlight = {
     type: "scattermap", mode: "markers",
     lat: [res.lat[0]], lon: [res.lon[0]],
     marker: { size: 15, color: HIGHLIGHT_COLOR },
     hoverinfo: "skip", showlegend: false, visible: false,
   };
-  const layout = {
+  Plotly.react("mp-map", [track, highlight], {
     map: { style: "open-street-map", center: res.center, zoom: res.zoom },
-    margin: { l: 0, r: 0, t: 0, b: 0 },
-    showlegend: false,
-    paper_bgcolor: cssVar("--chart-surface"),
-    font: { color: cssVar("--text-primary") },
+    margin: { l: 0, r: 0, t: 0, b: 0 }, showlegend: false,
+    paper_bgcolor: cssVar("--chart-surface"), font: { color: cssVar("--text-primary") },
+  }, PLOT_CONFIG);
+}
+
+// ローカル座標 (メートル等) → 等尺の平面軌跡として描く
+function renderPlanar(res) {
+  const colors = seriesColors();
+  const hasColor = res.color_signal && res.color_values;
+  const track = {
+    type: "scattergl", mode: hasColor ? "markers" : "lines+markers",
+    x: res.px, y: res.py, name: "軌跡",
+    line: { width: 2, color: colors[0] },
+    marker: hasColor
+      ? { size: 6, color: res.color_values, colorscale: "Viridis", showscale: true,
+          colorbar: { title: { text: res.color_signal, side: "right" }, thickness: 12 } }
+      : { size: 4, color: colors[0] },
+    customdata: res.index.map((_, i) => i),
+    hovertemplate: `${esc(res.px_col)} %{x}<br>${esc(res.py_col)} %{y}` +
+      (hasColor ? `<br>${esc(res.color_signal)} %{marker.color}` : "") + "<extra></extra>",
   };
+  const highlight = {
+    type: "scattergl", mode: "markers", x: [res.px[0]], y: [res.py[0]],
+    marker: { size: 14, color: HIGHLIGHT_COLOR, line: { width: 1, color: "#fff" } },
+    hoverinfo: "skip", showlegend: false, visible: false,
+  };
+  const layout = baseLayout({
+    height: 420, showlegend: false, margin: { l: 56, r: 20, t: 10, b: 44 },
+    xaxis: Object.assign(baseLayout().xaxis, { title: { text: res.px_col } }),
+    // 縦横を等尺にして軌跡の形が歪まないようにする
+    yaxis: Object.assign(baseLayout().yaxis, { title: { text: res.py_col }, scaleanchor: "x", scaleratio: 1 }),
+  });
   Plotly.react("mp-map", [track, highlight], layout, PLOT_CONFIG);
 }
 
@@ -381,7 +431,10 @@ function highlightMapPoint(res, idx) {
   const mapEl = $("#mp-map");
   if (!mapEl.data) return;
   const hi = mapEl.data.length - 1; // ハイライトトレースは最後
-  Plotly.restyle("mp-map", { lat: [[res.lat[idx]]], lon: [[res.lon[idx]]], visible: true }, [hi]);
+  const update = res.mode === "planar"
+    ? { x: [[res.px[idx]]], y: [[res.py[idx]]], visible: true }
+    : { lat: [[res.lat[idx]]], lon: [[res.lon[idx]]], visible: true };
+  Plotly.restyle("mp-map", update, [hi]);
 }
 
 function clearMapHighlight() {

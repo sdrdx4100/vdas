@@ -120,6 +120,67 @@ def test_map_track_filter_keeps_alignment(ingest_csv) -> None:
     assert res["lat"] == [35.02, 35.03, 35.04]
 
 
+# GPS_x/GPS_z が緯度・経度 (度)、GPS_y は標高 (メートル) のケース
+# (日本近辺: 緯度35, 経度139。標高は水平面より広がりが大きく水平面から外れる)
+GPS_XZ_DEG_CSV = """GPS_x,GPS_y,GPS_z
+139.00,100,35.00
+139.01,140,35.01
+139.02,90,35.02
+139.03,180,35.03
+139.04,210,35.04
+"""
+
+# GPS_x/GPS_z がローカル座標 (メートル) のケース
+GPS_XZ_M_CSV = """GPS_x,GPS_z
+0,0
+1200,300
+2500,600
+3600,1500
+4000,2600
+"""
+
+
+def test_detect_coord_axes() -> None:
+    cols = [
+        {"name": "GPS_x", "kind": "numeric"},
+        {"name": "GPS_y", "kind": "numeric"},
+        {"name": "GPS_z", "kind": "numeric"},
+    ]
+    assert gps.detect_coord_axes(cols) == {"x": "GPS_x", "y": "GPS_y", "z": "GPS_z"}
+    kind, coords = gps.coord_columns(cols)
+    assert kind == "axes"
+    assert coords == ["GPS_x", "GPS_y", "GPS_z"]
+
+
+def test_gps_dataset_recognized_by_axes(ingest_csv) -> None:
+    g = ingest_csv(GPS_XZ_M_CSV, filename="xz.csv")
+    assert gps.is_gps_dataset(g["id"])
+
+
+def test_map_track_axes_degrees_geographic(ingest_csv) -> None:
+    sig = ingest_csv(SIG_CSV, filename="jp.csv")
+    ingest_csv(GPS_XZ_DEG_CSV, filename="jp.csv")
+    res = gps.map_track(sig["id"], signals=["speed"])
+    assert res["mode"] == "geographic"
+    # GPS_x(139)=経度, GPS_z(35)=緯度 と値域から割り当てられる。
+    # GPS_y は広がりが小さいので水平面から除外される
+    assert res["lat_col"] == "GPS_z"
+    assert res["lon_col"] == "GPS_x"
+    assert res["lat"] == [35.0, 35.01, 35.02, 35.03, 35.04]
+    assert res["lon"][0] == 139.0
+
+
+def test_map_track_axes_meters_planar(ingest_csv) -> None:
+    sig = ingest_csv(SIG_CSV, filename="loc.csv")
+    ingest_csv(GPS_XZ_M_CSV, filename="loc.csv")
+    res = gps.map_track(sig["id"], signals=["speed"])
+    assert res["mode"] == "planar"
+    assert res["px_col"] == "GPS_x"
+    assert res["py_col"] == "GPS_z"
+    assert res["px"] == [0, 1200, 2500, 3600, 4000]
+    assert res["py"] == [0, 300, 600, 1500, 2600]
+
+
 def test_map_track_manual_gps_and_columns(ingest_csv) -> None:
     # 自動ペアが効かない別名でも、GPS と列を手動指定すれば結合できる
     sig = ingest_csv(SIG_CSV, filename="alpha.csv")

@@ -3,8 +3,12 @@
 GPS は信号ログとは別ファイル (同名の Parquet) として記録される。両者は
 同じ時間の流れ・同じ行数で並んでいるため、行位置 (rowid) で 1:1 に対応づける。
 
-- GPS データセット = 緯度・経度列を持つデータセット (列名から自動判定)
+- GPS データセット = 緯度・経度列 (または GPS_x/GPS_y/GPS_z のような座標列) を持つデータセット
 - 信号データセット = GPS のペア相手 (同じ元ファイル名を持つ別データセット)
+
+座標は「緯度・経度 (度)」の場合と「ローカル座標 (メートル等)」の場合がある。
+実際の値の範囲から自動判定し、前者は実地図タイル上に、後者は等尺の平面軌跡
+として描く (どちらの列を使うかは手動指定も可能)。
 
 地図 (上部) には GPS 軌跡を、波形 (下部) には信号を描く。行位置で連動する
 ため、波形上のカーソル位置を地図上の点に対応づけられる。
@@ -32,6 +36,11 @@ _LON_RE = re.compile(
     r"(^|[_\-\s])(lon(g(itude)?)?|lng|経度)([_\-\s]|$)|gps.*(lon|lng)|lon.*deg", re.IGNORECASE
 )
 
+# GPS_x / GPS_y / GPS_z, pos_x, coord_z … のような座標軸列 (軸の文字を取り出す)
+_COORD_AXIS_RE = re.compile(
+    r"(?:^|[_\-\s])(?:gps|pos(?:ition)?|coord|xyz)[_\-\s]*([xyz])(?:[_\-\s]|$)", re.IGNORECASE
+)
+
 # ペア判定でファイル名から取り除く GPS 由来の接尾辞
 _GPS_SUFFIX_RE = re.compile(r"[_\-\s]*(gps|pos(ition)?|loc(ation)?|latlon|track|位置)$", re.IGNORECASE)
 
@@ -49,31 +58,63 @@ def detect_latlon(columns: list[dict[str, Any]]) -> tuple[str | None, str | None
     return lat, lon
 
 
+def detect_coord_axes(columns: list[dict[str, Any]]) -> dict[str, str]:
+    """GPS_x / GPS_y / GPS_z のような座標軸列を {軸: 列名} で返す (数値列のみ)。"""
+    numeric = _numeric_names(columns)
+    axes: dict[str, str] = {}
+    for c in columns:
+        if c["name"] not in numeric:
+            continue
+        m = _COORD_AXIS_RE.search(c["name"])
+        if m:
+            axes.setdefault(m.group(1).lower(), c["name"])
+    return axes
+
+
+def coord_columns(columns: list[dict[str, Any]]) -> tuple[str, list[str]]:
+    """データセットの座標列を返す。
+
+    ("latlon", [lat, lon]) … 緯度経度らしい名前の列がある場合
+    ("axes",   [列名...])  … GPS_x/y/z のような座標軸列が2つ以上ある場合
+    ("none",   [])         … 座標列なし
+    """
+    lat, lon = detect_latlon(columns)
+    if lat and lon:
+        return "latlon", [lat, lon]
+    axes = detect_coord_axes(columns)
+    if len(axes) >= 2:
+        # 軸の文字順 (x, y, z) で安定させる
+        return "axes", [axes[a] for a in ("x", "y", "z") if a in axes]
+    return "none", []
+
+
 def _base_name(name: str) -> str:
     """ペア判定用に、GPS 接尾辞を落とした基準名 (小文字) を返す。"""
     stem = re.sub(r"\.(csv|parquet|pq)$", "", str(name), flags=re.IGNORECASE)
     return _GPS_SUFFIX_RE.sub("", stem).strip().lower()
 
 
-def _dataset_latlon(dataset_id: str) -> tuple[str | None, str | None, list[dict[str, Any]]]:
-    schema = dataset_schema(dataset_id)
-    columns = schema["columns"]
-    lat, lon = detect_latlon(columns)
-    return lat, lon, columns
+def _dataset_coords(dataset_id: str) -> tuple[str, list[str]]:
+    return coord_columns(dataset_schema(dataset_id)["columns"])
 
 
 def is_gps_dataset(dataset_id: str) -> bool:
-    lat, lon, _ = _dataset_latlon(dataset_id)
-    return bool(lat and lon)
+    kind, _ = _dataset_coords(dataset_id)
+    return kind != "none"
 
 
 def list_gps_datasets() -> list[dict[str, Any]]:
-    """緯度・経度列を持つデータセット (= GPS ログ) を一覧する。"""
+    """座標列 (緯度経度 または GPS_x/y/z) を持つデータセット (= GPS ログ) を一覧する。"""
     out = []
     for ds in list_datasets():
-        lat, lon, _ = _dataset_latlon(ds["id"])
-        if lat and lon:
-            out.append({"dataset": ds, "lat_col": lat, "lon_col": lon})
+        kind, cols = _dataset_coords(ds["id"])
+        if kind == "none":
+            continue
+        # 緯度経度らしい名前があればそれを既定に、無ければ列は値から判定する
+        lat = cols[0] if kind == "latlon" else None
+        lon = cols[1] if kind == "latlon" else None
+        out.append({"dataset": ds, "coord_kind": kind, "coord_cols": cols,
+                    "lat_col": lat, "lon_col": lon})
     return out
 
 
@@ -109,6 +150,8 @@ def gps_pairs() -> list[dict[str, Any]]:
             pairs.append({
                 "signal": ds,
                 "gps": pair["dataset"],
+                "coord_kind": pair["coord_kind"],
+                "coord_cols": pair["coord_cols"],
                 "lat_col": pair["lat_col"],
                 "lon_col": pair["lon_col"],
             })
@@ -122,6 +165,44 @@ def _zoom_for_span(span: float) -> float:
     # 経験的: 1 タイル ≒ 360/2^zoom 度。少し余白を持たせる
     zoom = math.log2(360.0 / max(span, 1e-6)) - 0.3
     return float(max(2.0, min(18.0, zoom)))
+
+
+def _num(values: list[Any]) -> list[float]:
+    return [float(v) for v in values if isinstance(v, (int, float))]
+
+
+def _looks_like_degrees(a: list[float], b: list[float]) -> bool:
+    """2列の値が緯度・経度 (度) らしいか判定する。
+
+    - 緯度は [-90, 90]、経度は [-180, 180] に収まる
+    - 1本の走行ログの広がりは高々数度 (地球規模ではない)
+    - 原点近傍のローカル座標 (メートル) を誤検出しないよう、
+      少なくとも一方の絶対値の中央が 1 度以上離れていることを要求する
+    """
+    if not a or not b:
+        return False
+    amax, bmax = max(map(abs, a)), max(map(abs, b))
+    aspan, bspan = max(a) - min(a), max(b) - min(b)
+    amean, bmean = sum(map(abs, a)) / len(a), sum(map(abs, b)) / len(b)
+    fits = (amax <= 90 and bmax <= 180) or (bmax <= 90 and amax <= 180)
+    modest_span = aspan <= 20 and bspan <= 20
+    off_origin = max(amean, bmean) >= 1.0
+    return fits and modest_span and off_origin
+
+
+def _assign_latlon(name_a: str, a: list[float], name_b: str,
+                   b: list[float]) -> tuple[str, str]:
+    """度らしい2列のうち、どちらが緯度・経度かを値域から割り当てる。"""
+    a90 = max(map(abs, a)) <= 90
+    b90 = max(map(abs, b)) <= 90
+    if a90 and not b90:
+        return name_a, name_b  # a=緯度, b=経度
+    if b90 and not a90:
+        return name_b, name_a
+    # 両方 90 以下 (赤道・本初子午線付近): 絶対値が小さい方を緯度とみなす
+    amean = sum(map(abs, a)) / len(a)
+    bmean = sum(map(abs, b)) / len(b)
+    return (name_a, name_b) if amean <= bmean else (name_b, name_a)
 
 
 def map_track(dataset_id: str, signals: list[str] | None = None,
@@ -149,16 +230,23 @@ def map_track(dataset_id: str, signals: list[str] | None = None,
     gps_table, gps_colmap = _schema_map(gps_id)
     gps_schema = dataset_schema(gps_id)
 
-    # --- 緯度・経度列の確定 ---
-    if not (lat_col and lon_col):
-        auto_lat, auto_lon = detect_latlon(gps_schema["columns"])
-        lat_col = lat_col or auto_lat
-        lon_col = lon_col or auto_lon
-    if not (lat_col and lon_col):
-        raise QueryError("GPS データの緯度・経度列を特定できませんでした。列を手動で指定してください")
-    for col in (lat_col, lon_col):
-        if col not in gps_colmap:
-            raise QueryError(f"GPS データに列がありません: {col}")
+    # --- 座標列の候補を決める ---
+    # 明示指定 (lat/lon) → 名前ベースの緯度経度 → GPS_x/y/z 座標軸、の順。
+    # 役割 (どちらが緯度/経度か・度かメートルか) は後段で値から判定する。
+    if lat_col and lon_col:
+        for col in (lat_col, lon_col):
+            if col not in gps_colmap:
+                raise QueryError(f"GPS データに列がありません: {col}")
+        coord_cols: list[str] = [lat_col, lon_col]
+        roles_fixed = True
+    else:
+        kind, cols = coord_columns(gps_schema["columns"])
+        if kind == "none":
+            raise QueryError(
+                "GPS データの座標列 (緯度・経度 または GPS_x/y/z) を特定できませんでした。"
+                "列を手動で指定してください")
+        coord_cols = cols
+        roles_fixed = (kind == "latlon")
 
     # --- 波形の信号列・X 軸列の確定 (すべて信号データセット側) ---
     signals = [s for s in (signals or []) if s]
@@ -195,7 +283,7 @@ def map_track(dataset_id: str, signals: list[str] | None = None,
         if not total:
             raise QueryError("結合できる行がありません (GPS と信号の行位置が一致していない可能性があります)")
         stride = max(1, math.ceil(total / limit))
-        out_cols = [f"f.{_quote(c)}" for c in sel_cols] + [f"g.{_quote(lat_col)}", f"g.{_quote(lon_col)}"]
+        out_cols = [f"f.{_quote(c)}" for c in sel_cols] + [f"g.{_quote(c)}" for c in coord_cols]
         rows = con.execute(
             f"SELECT f.__r, {', '.join(out_cols)} FROM ("
             f"  SELECT rowid AS __r, {inner_sel}row_number() OVER (ORDER BY rowid) AS __rn"
@@ -203,31 +291,73 @@ def map_track(dataset_id: str, signals: list[str] | None = None,
             f") f JOIN {_quote(gps_table)} g ON f.__r = g.rowid "
             f"WHERE (f.__rn - 1) % {stride} = 0 ORDER BY f.__r", params).fetchall()
 
-    # 列の並び: __r, [sel_cols...], lat, lon
+    # 列の並び: __r, [sel_cols...], [coord_cols...]
     index = [r[0] for r in rows]
-    col_at = {c: [ _jsonable(r[i + 1]) for r in rows] for i, c in enumerate(sel_cols)}
-    lat_vals = [_jsonable(r[len(sel_cols) + 1]) for r in rows]
-    lon_vals = [_jsonable(r[len(sel_cols) + 2]) for r in rows]
+    col_at = {c: [_jsonable(r[i + 1]) for r in rows] for i, c in enumerate(sel_cols)}
+    coord_at = {c: [_jsonable(r[len(sel_cols) + 1 + i]) for r in rows]
+                for i, c in enumerate(coord_cols)}
 
-    lat_clean = [v for v in lat_vals if isinstance(v, (int, float))]
-    lon_clean = [v for v in lon_vals if isinstance(v, (int, float))]
-    if lat_clean and lon_clean:
-        center = {"lat": sum(lat_clean) / len(lat_clean), "lon": sum(lon_clean) / len(lon_clean)}
-        span = max(max(lat_clean) - min(lat_clean), max(lon_clean) - min(lon_clean))
-        zoom = _zoom_for_span(span)
+    # --- 使う2軸と、緯度経度(度)かローカル座標(m)かを値から決める ---
+    # 役割固定 (明示指定 / 緯度経度名) ならその2列。GPS_x/y/z など軸が3つ
+    # あるときは、まず「度らしい2列の組」を探す (単位混在に強い)。無ければ
+    # 同一単位とみなし広がりの大きい上位2軸を水平面として選ぶ。
+    geographic = False
+    if roles_fixed:
+        a_name, b_name = coord_cols[0], coord_cols[1]
+        geographic = _looks_like_degrees(_num(coord_at[a_name]), _num(coord_at[b_name]))
     else:
-        center, zoom = {"lat": 0.0, "lon": 0.0}, 2.0
+        geo_pair = None
+        for i in range(len(coord_cols)):
+            for j in range(i + 1, len(coord_cols)):
+                ca, cb = coord_cols[i], coord_cols[j]
+                if _looks_like_degrees(_num(coord_at[ca]), _num(coord_at[cb])):
+                    geo_pair = (ca, cb)
+                    break
+            if geo_pair:
+                break
+        if geo_pair:
+            a_name, b_name = geo_pair
+            geographic = True
+        else:
+            spread = {c: (max(_num(v)) - min(_num(v))) if _num(v) else 0.0
+                      for c, v in coord_at.items()}
+            horiz = sorted(coord_cols, key=lambda c: -spread[c])[:2]
+            horiz.sort(key=lambda c: coord_cols.index(c))  # 元の軸順 (x,y,z) を保つ
+            a_name, b_name = horiz[0], horiz[1]
 
-    return {
+    a_vals, b_vals = coord_at[a_name], coord_at[b_name]
+    a_num, b_num = _num(a_vals), _num(b_vals)
+
+    result: dict[str, Any] = {
         "signal_dataset": signal_ds,
         "gps_dataset": gps_ds,
-        "lat_col": lat_col, "lon_col": lon_col, "x": x,
+        "x": x,
         "total_rows": total, "returned_rows": len(rows), "stride": stride,
         "index": index,
-        "lat": lat_vals, "lon": lon_vals,
         "x_values": col_at.get(x) if x else None,
         "signals": {s: col_at[s] for s in signals},
         "color_signal": color_signal,
         "color_values": col_at.get(color_signal) if color_signal else None,
-        "center": center, "zoom": zoom,
     }
+
+    if geographic:
+        # 緯度経度 → 実地図タイル上に描く
+        lat_name, lon_name = _assign_latlon(a_name, a_num, b_name, b_num)
+        lat_vals, lon_vals = coord_at[lat_name], coord_at[lon_name]
+        lat_clean, lon_clean = _num(lat_vals), _num(lon_vals)
+        center = {"lat": sum(lat_clean) / len(lat_clean), "lon": sum(lon_clean) / len(lon_clean)}
+        span = max(max(lat_clean) - min(lat_clean), max(lon_clean) - min(lon_clean))
+        result.update({
+            "mode": "geographic",
+            "lat_col": lat_name, "lon_col": lon_name,
+            "lat": lat_vals, "lon": lon_vals,
+            "center": center, "zoom": _zoom_for_span(span),
+        })
+    else:
+        # ローカル座標 (メートル等) → 等尺の平面軌跡として描く
+        result.update({
+            "mode": "planar",
+            "px_col": a_name, "py_col": b_name,
+            "px": a_vals, "py": b_vals,
+        })
+    return result

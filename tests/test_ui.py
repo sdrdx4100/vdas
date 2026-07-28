@@ -30,6 +30,21 @@ def test_analysis_workspace_and_modules_are_served() -> None:
             "ex-chart",
             "ex-group-tags",
             "ex-src-groups",
+            # GPS・地図の走行再生
+            "mp-play-toggle",
+            "mp-play-reset",
+            "mp-play-seek",
+            "mp-play-position",
+            "mp-play-speed",
+            "mp-playback-secondary",
+            "mp-play-seek-b",
+            "mp-play-position-b",
+            "mp-dataset-b",
+            "mp-gps-b",
+            "mp-alignment",
+            "mp-align-offset",
+            "mp-align-value",
+            "mp-align-reset",
         ):
             assert f'id="{element_id}"' in html
         for context in ("timeseries", "stats", "cluster"):
@@ -50,6 +65,7 @@ def test_analysis_workspace_and_modules_are_served() -> None:
             "datasets.js",
             "explore.js",
             "main.js",
+            "map.js",
             "state.js",
             "workspace.js",
             "views.js",

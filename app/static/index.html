@@ -444,7 +444,7 @@
   <section class="page" id="page-map">
     <div class="page-header">
       <h1>GPS・地図</h1>
-      <p>GPS ログ (緯度・経度) と信号ログを行位置で対応づけ、上部に走行軌跡の地図、下部に信号波形を表示します。地図・波形どちらかにカーソルを合わせると、もう一方の対応位置が連動して光ります。GPS ファイルは同名データから自動でペア判定します。</p>
+      <p>GPS ログと信号ログをペアにし、地図と信号波形を連動再生します。任意の比較走行 B を選ぶと、行数や時間軸が異なる2走行を重ねて表示できます。A/Bそれぞれのシークバーで同じ地点を選ぶと時間差を算出し、その位置から同期再生できます。</p>
     </div>
 
     <div class="card">
@@ -469,6 +469,17 @@
       </div>
       <div id="mp-pair-status" style="margin:4px 0 0; font-size:12px; color:var(--text-secondary);"></div>
 
+      <h3>比較走行 B <span class="hint">（任意・同じコースの別走行）</span></h3>
+      <div class="controls-row">
+        <label class="field">信号データセット B
+          <select id="mp-dataset-b" style="min-width:240px;"><option value="">— 比較しない —</option></select>
+        </label>
+        <label class="field">GPS データセット B
+          <select id="mp-gps-b" style="min-width:220px;" disabled><option value="">自動 (同名から判定)</option></select>
+        </label>
+      </div>
+      <div id="mp-pair-status-b" style="margin:4px 0 0; font-size:12px; color:var(--text-secondary);"></div>
+
       <h3>波形に表示する信号 (下部グラフ)</h3>
       <div class="controls-row" style="margin-bottom:8px;">
         <input type="search" id="mp-col-search" placeholder="信号名で絞り込み…" style="flex:1; max-width:320px;">
@@ -487,6 +498,35 @@
 
     <div class="card">
       <div id="mp-meta" style="margin-bottom:8px;"></div>
+      <div class="map-playback" id="mp-playback" aria-label="走行データ再生">
+        <button class="btn primary" id="mp-play-toggle" type="button" disabled>▶ 再生</button>
+        <button class="btn subtle" id="mp-play-reset" type="button" disabled title="先頭に戻る">⏮ 先頭</button>
+        <strong class="playback-run-label">A</strong>
+        <input id="mp-play-seek" type="range" min="0" max="0" value="0" step="1"
+               disabled aria-label="走行Aの再生位置">
+        <output id="mp-play-position" for="mp-play-seek">— / —</output>
+        <label class="field compact">再生速度
+          <select id="mp-play-speed">
+            <option value="0.5">0.5×</option>
+            <option value="1" selected>1×</option>
+            <option value="2">2×</option>
+            <option value="5">5×</option>
+          </select>
+        </label>
+        <div class="map-playback-secondary" id="mp-playback-secondary" hidden>
+          <strong class="playback-run-label">B</strong>
+          <input id="mp-play-seek-b" type="range" min="0" max="0" value="0" step="1"
+                 disabled aria-label="走行Bの再生位置">
+          <output id="mp-play-position-b" for="mp-play-seek-b">— / —</output>
+          <span class="hint">A/Bを別々に動かして同じ地点を選択</span>
+        </div>
+      </div>
+      <div class="map-alignment" id="mp-alignment" hidden>
+        <label for="mp-align-offset">走行 B の時間位置合わせ<br><span class="hint">＋でBを後ろへ移動</span></label>
+        <input id="mp-align-offset" type="range" min="-60" max="60" value="0" step="0.1">
+        <output id="mp-align-value" for="mp-align-offset">+0.0 秒</output>
+        <button class="btn subtle" id="mp-align-reset" type="button">ずれをリセット</button>
+      </div>
       <div class="chart" id="mp-map" style="height:420px;"></div>
     </div>
     <div class="card">

@@ -33,7 +33,10 @@ export async function refreshViewsPage() {
   const vBody = $("#views-table tbody");
   vBody.innerHTML = "";
   $("#views-empty").style.display = views.length ? "none" : "";
-  const kindLabel = { timeseries: "時系列", stats: "統計", compare: "自由分析", explore: "グラフ作成" };
+  const kindLabel = {
+    timeseries: "時系列", stats: "統計", compare: "自由分析",
+    explore: "グラフ作成", map: "GPS・地図",
+  };
   for (const v of views) {
     let dsNames;
     if (v.kind === "compare") {
@@ -43,7 +46,9 @@ export async function refreshViewsPage() {
     } else if (v.kind === "explore" && v.config.source === "groups") {
       dsNames = (v.config.group_tags || []).join(" / ") || "—";
     } else {
-      dsNames = [v.dataset_id].map((id) => state.datasets.find((d) => d.id === id)?.name || id)
+      const datasetIds = [v.dataset_id];
+      if (v.kind === "map" && v.config?.dataset_id_b) datasetIds.push(v.config.dataset_id_b);
+      dsNames = datasetIds.map((id) => state.datasets.find((d) => d.id === id)?.name || id)
         .filter(Boolean).join(" / ") || "—";
     }
     const tr = document.createElement("tr");
@@ -149,6 +154,10 @@ async function loadView(v) {
     if (c.max_points) $("#ts-maxpoints").value = c.max_points;
     if (c.mode) $("#ts-mode").value = c.mode;
     plotTimeseries();
+  } else if (v.kind === "map") {
+    gotoPage("map");
+    const { loadMapView } = await import("./map.js");
+    await loadMapView(v);
   } else {
     gotoPage("stats");
     $("#st-dataset").value = v.dataset_id || "";

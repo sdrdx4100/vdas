@@ -674,8 +674,95 @@ table.data td.num { font-variant-numeric: tabular-nums; }
 .controls-row.compact { margin-bottom: 8px; }
 .controls-row.compact select { min-width: 130px; }
 
+.map-playback {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  background: var(--subtle-hover);
+}
+
+.map-playback input[type="range"] {
+  flex: 1;
+  min-width: 140px;
+}
+
+.map-playback output {
+  min-width: 150px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.map-playback .field.compact {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.map-playback .field.compact select { min-width: 72px; }
+
+.playback-run-label {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+}
+
+.map-playback-secondary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-basis: 100%;
+  padding-top: 8px;
+  border-top: 1px solid var(--card-border);
+}
+
+.map-playback-secondary[hidden] { display: none; }
+.map-playback-secondary input[type="range"] { flex: 1; min-width: 140px; }
+.map-playback-secondary output { min-width: 150px; }
+.map-playback-secondary .hint { margin: 0; white-space: nowrap; }
+
+.map-alignment {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: -2px 0 10px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--card-border));
+  border-radius: 8px;
+}
+
+.map-alignment label {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.map-alignment input[type="range"] {
+  flex: 1;
+  min-width: 160px;
+}
+
+.map-alignment output {
+  min-width: 78px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
 @media (max-width: 1100px) {
   .grid-2 { grid-template-columns: 1fr; }
   .cohort-builder-grid { grid-template-columns: 1fr; }
   .nav-rail { width: 200px; }
+  .map-playback { flex-wrap: wrap; }
+  .map-playback input[type="range"] { order: 3; flex-basis: 100%; }
+  .map-alignment { flex-wrap: wrap; }
+  .map-alignment input[type="range"] { flex-basis: 100%; order: 3; }
 }

@@ -14,6 +14,7 @@ export const state = {
   },  // 自由分析タブ
   cl: { schema: null, result: null },          // クラスタリングタブ
   ex: { schema: null, filters: [], kind: "scatter" },  // グラフ作成タブ
+  mp: { schema: null, filters: [], track: null },  // GPS・地図タブ
   labelsets: [],
   tags: [],
   dsSelection: new Set(),      // データ管理タブの一括操作用チェック

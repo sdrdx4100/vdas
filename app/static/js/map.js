@@ -92,11 +92,13 @@ $("#mp-dataset").addEventListener("change", async () => {
     const cols = pair.lat_col && pair.lon_col
       ? ` (${esc(pair.lat_col)} / ${esc(pair.lon_col)})`
       : ` (座標列: ${(pair.coord_cols || []).map(esc).join(", ")} — 値から自動判定)`;
-    setPairStatus(`✅ GPS データ「${esc(pair.gps.name)}」を自動ペア${cols}`, "ok");
+    const how = pair.match === "timestamp" ? "ファイル名の日時で自動ペア"
+      : "ファイル名で自動ペア";
+    setPairStatus(`✅ GPS データ「${esc(pair.gps.name)}」を${how}${cols}`, "ok");
   } else {
     $("#mp-gps").value = "";
     await loadGpsSchema();
-    setPairStatus("⚠️ 同名の GPS データが見つかりません。GPS データセットを手動で選んでください。", "warn");
+    setPairStatus("⚠️ 対応する GPS データが見つかりません (ファイル名の一致・日時ともに不一致)。GPS データセットを手動で選んでください。", "warn");
   }
 
   // 代表信号を自動選択して即描画 (速度・回転数らしい列 → 先頭の数値列)

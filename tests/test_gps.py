@@ -1,6 +1,8 @@
 """GPS 検出・ペア判定・地図トラック結合のテスト。"""
 from __future__ import annotations
 
+from datetime import datetime
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -55,6 +57,45 @@ def test_find_gps_pair_by_filename(ingest_csv) -> None:
     assert pair is not None
     assert pair["lat_col"] == "latitude"
     assert pair["lon_col"] == "longitude"
+
+
+def test_extract_timestamp_formats() -> None:
+    # YYMMDD_HHMMSS と YYYY-MM-DD_HH-MM-SS はどちらも同じ日時を表す
+    assert gps.extract_timestamp("260518_191805.parquet") == datetime(2026, 5, 18, 19, 18, 5)
+    assert gps.extract_timestamp("busloigging_2026-05-18_19-18-05.parquet") == datetime(2026, 5, 18, 19, 18, 5)
+    assert gps.extract_timestamp("20260518_191805.csv") == datetime(2026, 5, 18, 19, 18, 5)
+    assert gps.extract_timestamp("no_timestamp_here.csv") is None
+    assert gps.extract_timestamp("drive001.csv") is None  # 誤検出しない
+
+
+def test_find_gps_pair_by_timestamp(ingest_csv) -> None:
+    # 命名規則が違っても、ファイル名の記録開始日時が一致すれば自動ペア (B社ケース)
+    sig = ingest_csv(SIG_CSV, filename="260518_191805.csv")
+    ingest_csv(GPS_CSV, filename="busloigging_2026-05-18_19-18-05.csv")
+    pair = gps.find_gps_pair(sig["id"])
+    assert pair is not None
+    assert pair["match"] == "timestamp"
+    assert pair["lat_col"] == "latitude"
+
+
+def test_name_match_takes_priority_over_timestamp(ingest_csv) -> None:
+    sig = ingest_csv(SIG_CSV, filename="drive_260518_191805.csv")
+    ingest_csv(GPS_CSV, filename="drive_260518_191805.csv")        # 同じ基準名
+    ingest_csv(GPS_CSV, filename="other_2026-05-18_19-18-05.csv")  # 時刻は一致だが別名
+    pair = gps.find_gps_pair(sig["id"])
+    assert pair["match"] == "name"
+
+
+def test_timestamp_pair_via_api(ingest_csv) -> None:
+    with TestClient(app) as client:
+        sig = client.post("/api/datasets/upload",
+                          files={"file": ("260518_191805.csv", SIG_CSV.encode(), "text/csv")}).json()
+        client.post("/api/datasets/upload",
+                    files={"file": ("busloigging_2026-05-18_19-18-05.csv", GPS_CSV.encode(), "text/csv")})
+        pairs = client.get("/api/gps/pairs").json()
+        assert len(pairs) == 1
+        assert pairs[0]["signal"]["id"] == sig["id"]
+        assert pairs[0]["match"] == "timestamp"
 
 
 def test_find_gps_pair_with_suffix(ingest_csv) -> None:

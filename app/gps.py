@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import math
 import re
+from datetime import datetime
 from typing import Any
 
 from . import db
@@ -94,6 +95,40 @@ def _base_name(name: str) -> str:
     return _GPS_SUFFIX_RE.sub("", stem).strip().lower()
 
 
+# ファイル名に埋め込まれた「記録開始日時」を突き合わせキーにするための抽出。
+# 例: 260518_191805 (YYMMDD_HHMMSS), busloigging_2026-05-18_19-18-05 (YYYY-MM-DD_HH-MM-SS)
+# はどちらも 2026-05-18 19:18:05 を表す。書式が違ってもこの日時で自動ペアできる。
+_TS_RE_YYYY = re.compile(
+    r"(19|20)(\d{2})[-_./]?(\d{2})[-_./]?(\d{2})[ _tT./-]*(\d{2})[-_.:]?(\d{2})[-_.:]?(\d{2})")
+_TS_RE_YY = re.compile(r"(?<!\d)(\d{2})(\d{2})(\d{2})[-_ ]?(\d{2})(\d{2})(\d{2})(?!\d)")
+
+# 記録開始が数秒ずれても同じ走行とみなす許容差 (秒)
+TS_TOLERANCE_SEC = 2.0
+
+
+def _valid_dt(y: int, mo: int, d: int, h: int, mi: int, s: int) -> datetime | None:
+    try:
+        return datetime(y, mo, d, h, mi, s)
+    except ValueError:
+        return None
+
+
+def extract_timestamp(name: str) -> datetime | None:
+    """ファイル名に含まれる日時 (記録開始時刻) を推定する。見つからなければ None。"""
+    stem = re.sub(r"\.(csv|parquet|pq)$", "", str(name), flags=re.IGNORECASE)
+    for m in _TS_RE_YYYY.finditer(stem):
+        dtv = _valid_dt(int(m.group(1) + m.group(2)), int(m.group(3)), int(m.group(4)),
+                        int(m.group(5)), int(m.group(6)), int(m.group(7)))
+        if dtv:
+            return dtv
+    for m in _TS_RE_YY.finditer(stem):
+        dtv = _valid_dt(2000 + int(m.group(1)), int(m.group(2)), int(m.group(3)),
+                        int(m.group(4)), int(m.group(5)), int(m.group(6)))
+        if dtv:
+            return dtv
+    return None
+
+
 def _dataset_coords(dataset_id: str) -> tuple[str, list[str]]:
     return coord_columns(dataset_schema(dataset_id)["columns"])
 
@@ -119,22 +154,39 @@ def list_gps_datasets() -> list[dict[str, Any]]:
 
 
 def find_gps_pair(dataset_id: str) -> dict[str, Any] | None:
-    """信号データセットに対応する GPS データセットを、元ファイル名で探す。
+    """信号データセットに対応する GPS データセットを探す。
 
-    同じ基準名 (GPS 接尾辞を除いた元ファイル名) を持つ GPS データセットを返す。
-    候補が複数あれば登録が新しいものを優先する。
+    ①ファイル名の基準名一致 (A社のように同名で保存されている場合) を優先し、
+    無ければ②ファイル名に埋め込まれた記録開始日時の一致で突き合わせる
+    (B社のように GPS と信号で命名規則が違っても、同じ時刻なら自動ペア)。
     """
     target = get_dataset(dataset_id)
-    base = _base_name(target["original_filename"] or target["name"])
-    best = None
+    tname = target["original_filename"] or target["name"]
+    base = _base_name(tname)
+    tgt_ts = extract_timestamp(tname)
+
+    name_hit: dict[str, Any] | None = None
+    ts_hits: list[tuple[float, dict[str, Any]]] = []
     for entry in list_gps_datasets():
         ds = entry["dataset"]
         if ds["id"] == dataset_id:
             continue
-        if _base_name(ds["original_filename"] or ds["name"]) == base:
-            if best is None:  # list_datasets は新しい順なので先頭を採用
-                best = entry
-    return best
+        cname = ds["original_filename"] or ds["name"]
+        if _base_name(cname) == base:
+            if name_hit is None:  # list_datasets は新しい順なので先頭を採用
+                name_hit = {**entry, "match": "name"}
+        elif tgt_ts is not None:
+            cts = extract_timestamp(cname)
+            if cts is not None:
+                delta = abs((cts - tgt_ts).total_seconds())
+                if delta <= TS_TOLERANCE_SEC:
+                    ts_hits.append((delta, {**entry, "match": "timestamp"}))
+    if name_hit is not None:
+        return name_hit
+    if ts_hits:
+        ts_hits.sort(key=lambda x: x[0])  # 時刻差が最小の候補を採用
+        return ts_hits[0][1]
+    return None
 
 
 def gps_pairs() -> list[dict[str, Any]]:
@@ -154,6 +206,7 @@ def gps_pairs() -> list[dict[str, Any]]:
                 "coord_cols": pair["coord_cols"],
                 "lat_col": pair["lat_col"],
                 "lon_col": pair["lon_col"],
+                "match": pair.get("match"),
             })
     return pairs
 

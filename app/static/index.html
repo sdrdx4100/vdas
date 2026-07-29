@@ -96,6 +96,7 @@
         <strong id="bulk-count"></strong>
         <button class="btn" id="bulk-add-tags">🏷️ タグを追加</button>
         <button class="btn" id="bulk-remove-tags">タグを外す</button>
+        <button class="btn" id="bulk-concat" title="分割記録を1本の連続ログに繋ぐ">🔗 結合</button>
         <button class="btn danger-text" id="bulk-delete">🗑️ 削除</button>
         <button class="btn subtle" id="bulk-clear">選択解除</button>
       </div>
@@ -713,6 +714,22 @@
     <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:18px;">
       <button class="btn" id="namemodal-cancel">キャンセル</button>
       <button class="btn primary" id="namemodal-save">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 結合モーダル (分割ログの連結: 順序指定 + 名前) -->
+<div id="concat-backdrop" class="modal-backdrop" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true" style="min-width:420px;">
+    <h2 style="margin:0 0 6px; font-size:16px;">データセットを結合</h2>
+    <p style="margin:0 0 12px; font-size:12px; color:var(--text-secondary);">上から順に行方向で連結し、1本の連続ログを作ります (列は名前で自動整列)。↑↓ で順序を調整してください。</p>
+    <div id="concatmodal-list" style="display:flex; flex-direction:column; gap:6px; max-height:320px; overflow-y:auto;"></div>
+    <label class="field" style="margin-top:14px; width:100%;">結合後の名前
+      <input type="text" id="concatmodal-name" style="width:100%;" placeholder="例: 連結走行 A">
+    </label>
+    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:18px;">
+      <button class="btn" id="concatmodal-cancel">キャンセル</button>
+      <button class="btn primary" id="concatmodal-save">🔗 結合する</button>
     </div>
   </div>
 </div>

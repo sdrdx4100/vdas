@@ -65,3 +65,39 @@ def test_delete_dataset_removes_table_metadata_and_original(ingest_csv) -> None:
 def test_rejects_unsupported_extension(ingest_csv) -> None:
     with pytest.raises(ingest.IngestError, match="未対応の拡張子"):
         ingest_csv(CSV, filename="sample.txt")
+
+
+P1 = "time,speed\n0,10\n1,11\n"
+P2 = "speed,time\n20,2\n21,3\n"   # 列順が逆でも名前で揃う
+P3 = "time,speed\n4,40\n"
+
+
+def test_concat_datasets_appends_rows_in_order(ingest_csv) -> None:
+    a = ingest_csv(P1, filename="part1.csv")
+    b = ingest_csv(P2, filename="part2.csv")
+    c = ingest_csv(P3, filename="part3.csv")
+    merged = ingest.concat_datasets([a["id"], b["id"], c["id"]], name="連結走行")
+    assert merged["name"] == "連結走行"
+    assert merged["row_count"] == 5
+    from app import queries
+    res = queries.timeseries(merged["id"], "time", ["speed"], max_points=100)
+    # 連結順に time が 0,1,2,3,4 と並ぶ (part2 の列順違いも吸収)
+    assert res["data"]["time"] == [0, 1, 2, 3, 4]
+    assert res["data"]["speed"] == [10, 11, 20, 21, 40]
+
+
+def test_concat_merges_tags_and_is_deletable(ingest_csv) -> None:
+    a = ingest_csv(P1, filename="p1.csv", tags=["トヨタ"])
+    b = ingest_csv(P3, filename="p3.csv", tags=["トヨタ", "高速"])
+    merged = ingest.concat_datasets([a["id"], b["id"]])
+    assert set(merged["tags"]) == {"トヨタ", "高速"}
+    # 派生データ (原本ファイル無し) でも削除がエラーにならない
+    ingest.delete_dataset(merged["id"])
+    with pytest.raises(ingest.IngestError):
+        ingest.get_dataset(merged["id"])
+
+
+def test_concat_requires_two(ingest_csv) -> None:
+    a = ingest_csv(P1, filename="one.csv")
+    with pytest.raises(ingest.IngestError, match="2つ以上"):
+        ingest.concat_datasets([a["id"]])

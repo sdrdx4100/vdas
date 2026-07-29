@@ -71,6 +71,52 @@ def ingest_file(fileobj: BinaryIO, original_filename: str, dataset_name: str | N
     return get_dataset(dataset_id)
 
 
+def concat_datasets(dataset_ids: list[str], name: str | None = None,
+                    tags: list[str] | None = None) -> dict[str, Any]:
+    """複数のデータセットを指定順に行方向で連結し、新しいデータセットを作る。
+
+    分割記録 (1区間が複数ファイルに分かれている) を1本の連続ログに繋ぐ用途。
+    列は名前で揃えて連結する (UNION ALL BY NAME) ので列順の違いは吸収され、
+    連結順に rowid が振り直されるため、信号側と GPS 側を同じ順で連結すれば
+    行位置での対応づけも保たれる。
+    """
+    if len(dataset_ids) < 2:
+        raise IngestError("結合には2つ以上のデータセットを選択してください")
+    parts = [get_dataset(ds_id) for ds_id in dataset_ids]  # 存在チェック & 順序保持
+
+    new_id = uuid.uuid4().hex[:12]
+    table_name = f"ds_{new_id}"
+    union_sql = " UNION ALL BY NAME ".join(
+        f'SELECT * FROM "{p["table_name"]}"' for p in parts)
+    try:
+        with db.duck() as con:
+            con.execute(f'CREATE TABLE "{table_name}" AS {union_sql}')
+            row_count = con.execute(f'SELECT count(*) FROM "{table_name}"').fetchone()[0]
+            columns = con.execute(f'DESCRIBE "{table_name}"').fetchall()
+    except Exception as e:
+        with db.duck() as con:
+            con.execute(f'DROP TABLE IF EXISTS "{table_name}"')
+        raise IngestError(f"データセットの結合に失敗しました: {e}") from e
+
+    # 派生データなので原本ファイルは持たない (実在しないパスを置き、削除時は no-op)
+    stored_path = UPLOAD_DIR / f"{new_id}.concat"
+    name = name or ("結合_" + "＋".join(p["name"] for p in parts))[:120]
+    if tags is None:  # 既定は各パーツのタグの和集合
+        merged: list[str] = []
+        for p in parts:
+            for t in p["tags"]:
+                if t not in merged:
+                    merged.append(t)
+        tags = merged
+    db.meta_execute(
+        "INSERT INTO datasets (id, name, original_filename, stored_path, table_name, row_count, column_count, file_size, tags)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (new_id, name, f"{name}.concat", str(stored_path), table_name,
+         row_count, len(columns), 0, json.dumps(_clean_tags(tags), ensure_ascii=False)),
+    )
+    return get_dataset(new_id)
+
+
 def _decode(row: dict[str, Any]) -> dict[str, Any]:
     row["tags"] = json.loads(row.get("tags") or "[]")
     return row

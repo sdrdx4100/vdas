@@ -137,3 +137,61 @@ export function openNameDialog(title, value = "") {
     $("#namemodal-input").focus();
   });
 }
+
+// ---------- 結合モーダル (分割ログの連結: 順序指定 + 名前) ----------
+
+const concatModal = { resolve: null, items: [] };
+
+export function openConcatDialog(datasets, defaultName = "") {
+  return new Promise((resolve) => {
+    if (!concatModal.bound) {
+      concatModal.bound = true;
+      const close = (result) => {
+        $("#concat-backdrop").hidden = true;
+        const r = concatModal.resolve;
+        concatModal.resolve = null;
+        if (r) r(result);
+      };
+      $("#concatmodal-save").addEventListener("click", () =>
+        close({ order: concatModal.items.map((d) => d.id), name: $("#concatmodal-name").value.trim() || null }));
+      $("#concatmodal-cancel").addEventListener("click", () => close(null));
+      $("#concat-backdrop").addEventListener("mousedown", (e) => {
+        if (e.target.id === "concat-backdrop") close(null);
+      });
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && !$("#concat-backdrop").hidden) close(null);
+      });
+    }
+    concatModal.resolve = resolve;
+    concatModal.items = [...datasets];
+    $("#concatmodal-name").value = defaultName;
+    renderConcatList();
+    $("#concat-backdrop").hidden = false;
+    $("#concatmodal-name").focus();
+  });
+}
+
+function renderConcatList() {
+  const wrap = $("#concatmodal-list");
+  wrap.innerHTML = "";
+  concatModal.items.forEach((d, i) => {
+    const row = document.createElement("div");
+    row.style.cssText = "display:flex; align-items:center; gap:8px; padding:6px 8px; border:1px solid var(--card-border); border-radius:6px;";
+    row.innerHTML =
+      `<span style="min-width:20px; font-weight:600; color:var(--accent);">${i + 1}</span>` +
+      `<span style="flex:1;">${esc(d.name)} <small style="color:var(--text-muted);">(${d.row_count.toLocaleString("ja-JP")}行)</small></span>` +
+      `<button class="btn subtle" data-act="up" title="上へ"${i === 0 ? " disabled" : ""}>↑</button>` +
+      `<button class="btn subtle" data-act="down" title="下へ"${i === concatModal.items.length - 1 ? " disabled" : ""}>↓</button>`;
+    row.querySelector('[data-act="up"]').addEventListener("click", () => moveConcatItem(i, -1));
+    row.querySelector('[data-act="down"]').addEventListener("click", () => moveConcatItem(i, 1));
+    wrap.appendChild(row);
+  });
+}
+
+function moveConcatItem(i, dir) {
+  const j = i + dir;
+  const items = concatModal.items;
+  if (j < 0 || j >= items.length) return;
+  [items[i], items[j]] = [items[j], items[i]];
+  renderConcatList();
+}

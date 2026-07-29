@@ -1,7 +1,7 @@
 /* データ管理タブ: 一覧・タグ付け・一括操作・アップロード・プレビュー */
 import { $, $$, api, toast, fmtNum, fmtSize, esc } from "./api.js";
 import { state } from "./state.js";
-import { chipEditor, openTagEditor, updateTagDatalist } from "./modals.js";
+import { chipEditor, openTagEditor, updateTagDatalist, openConcatDialog } from "./modals.js";
 import { gotoPage } from "./nav.js";
 import { renderAnalysisTags } from "./analysis.js";
 import { refreshLabelsets } from "./views.js";
@@ -142,6 +142,29 @@ $("#bulk-remove-tags").addEventListener("click", async () => {
   });
   toast(`${ids.length} 件からタグを外しました`);
   refreshDatasets();
+});
+
+$("#bulk-concat").addEventListener("click", async () => {
+  const ids = [...state.dsSelection];
+  if (ids.length < 2) return toast("結合するデータセットを2つ以上選択してください", "error");
+  // 既定の順序: ファイル名/名前の自然順 (分割記録は連番・日時を含むことが多い)
+  const chosen = state.datasets.filter((d) => state.dsSelection.has(d.id));
+  chosen.sort((a, b) => (a.original_filename || a.name).localeCompare(
+    b.original_filename || b.name, "ja", { numeric: true }));
+  const result = await openConcatDialog(chosen, `連結_${chosen[0].name}`);
+  if (!result) return;
+  try {
+    const ds = await api("/api/datasets/concat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dataset_ids: result.order, name: result.name }),
+    });
+    state.dsSelection.clear();
+    toast(`${ids.length} 件を結合しました: ${ds.name} (${fmtNum(ds.row_count)}行)`);
+    refreshDatasets();
+  } catch (e) {
+    toast(`結合に失敗しました: ${e.message}`, "error");
+  }
 });
 
 $("#bulk-delete").addEventListener("click", async () => {

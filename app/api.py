@@ -78,6 +78,17 @@ def post_bulk_delete(req: BulkDeleteRequest):
     return _wrap(ingest.bulk_delete, req.dataset_ids)
 
 
+class ConcatRequest(BaseModel):
+    dataset_ids: list[str] = Field(min_length=2)
+    name: str | None = None
+    tags: list[str] | None = None
+
+
+@router.post("/datasets/concat")
+def post_concat(req: ConcatRequest):
+    return _wrap(ingest.concat_datasets, req.dataset_ids, req.name, req.tags)
+
+
 class DeleteAllRequest(BaseModel):
     include_views: bool = False
 

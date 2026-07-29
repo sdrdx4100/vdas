@@ -273,6 +273,14 @@ def map_track(dataset_id: str, signals: list[str] | None = None,
     where, params = _build_where(filters, sig_cols)
     limit = _clamp_points(max_points)
 
+    # 水平面に使わない座標軸 (高度 GPS_z など) も色分け用に取得しておく。
+    # lat/lon を明示指定した場合でも高度を落とさないよう、GPS 側で独立に探す。
+    axes_all = detect_coord_axes(gps_schema["columns"])
+    alt_candidate = next(
+        (axes_all[a] for a in ("z", "y", "x") if axes_all.get(a) and axes_all[a] not in coord_cols),
+        None)
+    fetch_coords = coord_cols + ([alt_candidate] if alt_candidate else [])
+
     # 信号側で必要な列だけを rowid 付きで抽出 → GPS と rowid で結合 → 間引き
     sel_cols = list(dict.fromkeys([c for c in ([x] if x else []) + signals +
                                    ([color_signal] if color_signal else [])]))
@@ -286,7 +294,7 @@ def map_track(dataset_id: str, signals: list[str] | None = None,
         if not total:
             raise QueryError("結合できる行がありません (GPS と信号の行位置が一致していない可能性があります)")
         stride = max(1, math.ceil(total / limit))
-        out_cols = [f"f.{_quote(c)}" for c in sel_cols] + [f"g.{_quote(c)}" for c in coord_cols]
+        out_cols = [f"f.{_quote(c)}" for c in sel_cols] + [f"g.{_quote(c)}" for c in fetch_coords]
         rows = con.execute(
             f"SELECT f.__r, {', '.join(out_cols)} FROM ("
             f"  SELECT rowid AS __r, {inner_sel}row_number() OVER (ORDER BY rowid) AS __rn"
@@ -294,11 +302,11 @@ def map_track(dataset_id: str, signals: list[str] | None = None,
             f") f JOIN {_quote(gps_table)} g ON f.__r = g.rowid "
             f"WHERE (f.__rn - 1) % {stride} = 0 ORDER BY f.__r", params).fetchall()
 
-    # 列の並び: __r, [sel_cols...], [coord_cols...]
+    # 列の並び: __r, [sel_cols...], [fetch_coords...]
     index = [r[0] for r in rows]
     col_at = {c: [_jsonable(r[i + 1]) for r in rows] for i, c in enumerate(sel_cols)}
     coord_at = {c: [_jsonable(r[len(sel_cols) + 1 + i]) for r in rows]
-                for i, c in enumerate(coord_cols)}
+                for i, c in enumerate(fetch_coords)}
 
     # --- 使う2軸を決める ---
     # GPS_x/y/z 軸の慣習: x=経度(東), y=緯度(北), z=高度。x と y が揃っていれば
@@ -377,4 +385,10 @@ def map_track(dataset_id: str, signals: list[str] | None = None,
             "px_col": a_name, "py_col": b_name,
             "px": a_vals, "py": b_vals,
         })
+
+    # 水平面に使わなかった座標列 (高度 GPS_z など) を色分け用に返す
+    alt_col = alt_candidate or next((c for c in coord_cols if c not in (a_name, b_name)), None)
+    if alt_col and alt_col in coord_at:
+        result["alt_col"] = alt_col
+        result["alt_values"] = coord_at[alt_col]
     return result

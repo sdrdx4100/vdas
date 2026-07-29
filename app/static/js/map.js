@@ -81,6 +81,7 @@ $("#mp-dataset").addEventListener("change", async () => {
   renderSignalColumns();
   const colorSel = $("#mp-color");
   colorSel.innerHTML = '<option value="">なし (単色の軌跡)</option>' +
+    '<option value="__alt__">高度 (GPS_z)</option>' +
     columnOptions(state.mp.schema, { numericOnly: true });
 
   // GPS ペアを自動選択して案内する
@@ -289,9 +290,11 @@ export async function plotMap(auto = false) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
+    const colorValue = $("#mp-color").value;
     const requestA = requestTrack(dsId, {
       signals: signalRequestA.signals,
-      color_signal: dsIdB ? null : ($("#mp-color").value || null),
+      // 高度(__alt__)は常に返る alt_values を使うため信号としては要求しない
+      color_signal: (dsIdB || colorValue === "__alt__") ? null : (colorValue || null),
       gps_id: $("#mp-gps").value || null,
       lat_col: $("#mp-lat").value || null,
       lon_col: $("#mp-lon").value || null,
@@ -618,13 +621,23 @@ function renderMap(view) {
   return renderGeographic(view);
 }
 
+// 軌跡の色分け指定を決める (単独走行のみ)。信号 or 高度(GPS_z) → {値, ラベル}
+function mapColorSpec(res, comparison) {
+  if (comparison) return null;  // 2走行比較は走行色で区別するため色分けしない
+  const v = $("#mp-color").value;
+  if (v === "__alt__" && res.alt_values) return { values: res.alt_values, label: res.alt_col || "高度" };
+  if (v && res.color_signal && res.color_values) return { values: res.color_values, label: res.color_signal };
+  return null;
+}
+
 // 緯度経度 → 実地図タイル上に軌跡を描く
 function renderGeographic(view) {
   const comparison = view.runs.length > 1;
   const traces = [];
   for (const [runIndex, run] of view.runs.entries()) {
     const res = run.res;
-    const hasColor = !comparison && res.color_signal && res.color_values;
+    const cspec = mapColorSpec(res, comparison);
+    const hasColor = !!cspec;
     const actualLat = res.lat.map((value, i) => run.course.estimated[i] ? null : value);
     const actualLon = res.lon.map((value, i) => run.course.estimated[i] ? null : value);
     traces.push({
@@ -632,12 +645,12 @@ function renderGeographic(view) {
       lat: actualLat, lon: actualLon, name: run.label,
       line: { width: 3, color: run.color },
       marker: hasColor
-        ? { size: 7, color: res.color_values, colorscale: "Viridis", showscale: true,
-            colorbar: { title: { text: res.color_signal, side: "right" }, thickness: 12 } }
+        ? { size: 7, color: cspec.values, colorscale: "Viridis", showscale: true,
+            colorbar: { title: { text: cspec.label, side: "right" }, thickness: 12 } }
         : { size: comparison ? 5 : 4, color: run.color },
       customdata: res.index.map((_, pointIndex) => ({ runIndex, pointIndex })),
       hovertemplate: `<b>${run.label}</b><br>緯度 %{lat:.5f}<br>経度 %{lon:.5f}` +
-        (hasColor ? `<br>${esc(res.color_signal)} %{marker.color}` : "") + "<extra></extra>",
+        (hasColor ? `<br>${esc(cspec.label)} %{marker.color}` : "") + "<extra></extra>",
     });
     if (run.course.estimatedCount) {
       const estimated = estimatedTrackCoords(run.course.filledX, run.course.filledY,
@@ -675,7 +688,8 @@ function renderPlanar(view) {
   const traces = [];
   for (const [runIndex, run] of view.runs.entries()) {
     const res = run.res;
-    const hasColor = !comparison && res.color_signal && res.color_values;
+    const cspec = mapColorSpec(res, comparison);
+    const hasColor = !!cspec;
     const actualX = res.px.map((value, i) => run.course.estimated[i] ? null : value);
     const actualY = res.py.map((value, i) => run.course.estimated[i] ? null : value);
     traces.push({
@@ -683,12 +697,12 @@ function renderPlanar(view) {
       x: actualX, y: actualY, name: run.label,
       line: { width: 2, color: run.color },
       marker: hasColor
-        ? { size: 6, color: res.color_values, colorscale: "Viridis", showscale: true,
-            colorbar: { title: { text: res.color_signal, side: "right" }, thickness: 12 } }
+        ? { size: 6, color: cspec.values, colorscale: "Viridis", showscale: true,
+            colorbar: { title: { text: cspec.label, side: "right" }, thickness: 12 } }
         : { size: comparison ? 5 : 4, color: run.color },
       customdata: res.index.map((_, pointIndex) => ({ runIndex, pointIndex })),
       hovertemplate: `<b>${run.label}</b><br>${esc(res.px_col)} %{x}<br>${esc(res.py_col)} %{y}` +
-        (hasColor ? `<br>${esc(res.color_signal)} %{marker.color}` : "") + "<extra></extra>",
+        (hasColor ? `<br>${esc(cspec.label)} %{marker.color}` : "") + "<extra></extra>",
     });
     if (run.course.estimatedCount) {
       const estimated = estimatedTrackCoords(run.course.filledX, run.course.filledY,

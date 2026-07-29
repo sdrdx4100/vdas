@@ -187,6 +187,15 @@ def test_map_track_axes_meters_planar(ingest_csv) -> None:
     assert res["py"] == [0, 300, 600, 1500, 2600]
 
 
+def test_map_track_returns_altitude(ingest_csv) -> None:
+    # 水平面に使わなかった高度 GPS_z を色分け用に返す
+    sig = ingest_csv(SIG_CSV, filename="alt.csv")
+    ingest_csv(GPS_XYZ_DEG_CSV, filename="alt.csv")
+    res = gps.map_track(sig["id"], signals=["speed"])
+    assert res["alt_col"] == "GPS_z"
+    assert res["alt_values"] == [12.0, 14.0, 11.0, 18.0, 21.0]
+
+
 def test_map_track_manual_gps_and_columns(ingest_csv) -> None:
     # 自動ペアが効かない別名でも、GPS と列を手動指定すれば結合できる
     sig = ingest_csv(SIG_CSV, filename="alpha.csv")

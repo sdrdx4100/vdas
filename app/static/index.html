@@ -39,6 +39,10 @@
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M7.5 3 3 4.7v12.3l4.5-1.7 5 1.7 4.5-1.7V3l-4.5 1.7-5-1.7Z"/><path d="M7.5 3v12.3M12.5 4.7V17"/></svg>
     GPS・地図
   </button>
+  <button class="nav-item" data-page="tscompare">
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 6h14M3 6l2.5 3L3 12M17 14H3M17 14l-2.5-3 2.5-3"/></svg>
+    時系列比較
+  </button>
   <button class="nav-item" data-page="cluster">
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="2.2"/><circle cx="14.5" cy="8" r="2.2"/><circle cx="9" cy="14.5" r="2.2"/><path d="M7.8 7.4l4.6 0M7 8.2l1.2 4.2M13.2 9.8l-3 3.4" stroke-dasharray="1.5 1.8"/></svg>
     クラスタリング
@@ -540,6 +544,61 @@
     </div>
     <div class="card">
       <div class="chart tall" id="mp-wave"></div>
+    </div>
+  </section>
+
+  <!-- ================== 時系列比較 ================== -->
+  <section class="page" id="page-tscompare">
+    <div class="page-header">
+      <h1>時系列比較</h1>
+      <p>2走行の信号を、時刻が違っても<strong>同じ条件に揃えて</strong>重ねて比較します。横軸(整列軸)を選べます: <strong>基準信号</strong>(速度・RPMなどを横軸にして「同じ速度域での挙動」を比較)、<strong>時間+手動オフセット</strong>(Bをずらして重ねる)。信号ごとに個別軸で積み重ね、同じフィルタを両走行に適用します。</p>
+    </div>
+
+    <div class="card">
+      <div class="controls-row">
+        <label class="field">走行A (基準)
+          <select id="tc-dataset-a" style="min-width:220px;"></select>
+        </label>
+        <label class="field">走行B (比較・任意)
+          <select id="tc-dataset-b" style="min-width:220px;"><option value="">なし (1走行のみ)</option></select>
+        </label>
+        <label class="field">整列軸 (横軸)
+          <select id="tc-xmode" style="min-width:180px;">
+            <option value="ref">基準信号を横軸</option>
+            <option value="time">時間 + 手動オフセット</option>
+          </select>
+        </label>
+        <label class="field" id="tc-xref-wrap">基準信号 (X)
+          <select id="tc-xref" style="min-width:160px;"></select>
+        </label>
+        <label class="field" id="tc-xtime-wrap" hidden>時間列 (X)
+          <select id="tc-xtime" style="min-width:160px;"></select>
+        </label>
+        <label class="field" id="tc-offset-wrap" hidden>Bのオフセット
+          <input type="number" id="tc-offset" value="0" step="any" style="width:110px;">
+        </label>
+        <label class="field">最大表示点数
+          <input type="number" id="tc-maxpoints" value="5000" min="100" max="50000" step="100" style="width:110px;">
+        </label>
+        <button class="btn" id="tc-plot" title="手動で再描画">🔄 更新</button>
+      </div>
+
+      <h3>比較する信号 (Y軸)</h3>
+      <div class="controls-row" style="margin-bottom:8px;">
+        <input type="search" id="tc-col-search" placeholder="信号名で絞り込み…" style="flex:1; max-width:320px;">
+        <span id="tc-selection-summary" class="selection-summary" aria-live="polite">0 信号選択中</span>
+        <button class="btn subtle" id="tc-clear-selection" type="button">選択解除</button>
+      </div>
+      <div class="col-picker" id="tc-cols"></div>
+
+      <h3>フィルタ条件 (両走行に同じ条件を適用)</h3>
+      <div id="tc-filters"></div>
+      <button class="btn subtle" id="tc-add-filter">＋ 条件を追加</button>
+    </div>
+
+    <div class="card">
+      <div id="tc-meta" style="margin-bottom:8px;"></div>
+      <div class="chart tall" id="tc-chart"></div>
     </div>
   </section>
 

@@ -15,6 +15,7 @@ export const state = {
   cl: { schema: null, result: null },          // クラスタリングタブ
   ex: { schema: null, filters: [], kind: "scatter" },  // グラフ作成タブ
   mp: { schema: null, schemaB: null, filters: [], track: null, trackB: null },  // GPS・地図タブ
+  tc: { schemaA: null, schemaB: null, filters: [] },  // 時系列比較タブ
   labelsets: [],
   tags: [],
   dsSelection: new Set(),      // データ管理タブの一括操作用チェック

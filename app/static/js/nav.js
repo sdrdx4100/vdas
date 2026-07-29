@@ -4,6 +4,7 @@ import { state } from "./state.js";
 import { refreshViewsPage } from "./views.js";
 import { onAnalysisPageEnter } from "./analysis.js";
 import { onMapPageEnter } from "./map.js";
+import { onTscomparePageEnter } from "./tscompare.js";
 
 $$(".nav-item[data-page]").forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -14,6 +15,7 @@ $$(".nav-item[data-page]").forEach((btn) => {
     if (btn.dataset.page === "views") refreshViewsPage();
     if (btn.dataset.page === "compare") onAnalysisPageEnter();
     if (btn.dataset.page === "map") onMapPageEnter();
+    if (btn.dataset.page === "tscompare") onTscomparePageEnter();
     // 単一データセットのタブ: 未選択なら最初のデータセットを自動選択して即描画。
     // 選択済みでもスキーマ未読込 (別画面で値だけ変えた場合) なら読み込んで描画
     if (["timeseries", "stats", "cluster", "explore"].includes(btn.dataset.page)) {

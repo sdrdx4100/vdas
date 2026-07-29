@@ -346,8 +346,13 @@ export async function plotMap(auto = false) {
       `<span class="chip">GPS: ${esc(res.gps_dataset.name)}</span> ${modeChip}`;
     renderChart("mp-map", () => renderMap(view));
     renderChart("mp-wave", () => renderWave(view));
-    wireLinkedCursor(view);
-    resetPlayback(view);
+    // 連動・再生の初期化で万一エラーが出ても、描画済みのグラフは消さない
+    try {
+      wireLinkedCursor(view);
+      resetPlayback(view);
+    } catch (linkErr) {
+      console.warn("連動/再生の初期化に失敗しました:", linkErr);
+    }
   } catch (e) {
     if (requestId === mpRequestId) {
       clearPlayback();
@@ -858,6 +863,22 @@ function wireLinkedCursor(view) {
   mapEl.on?.("plotly_click", (ev) => seekFromPlotEvent(view, ev));
 }
 
+// 地図(MapLibre)はスタイル読み込み完了前に restyle すると "Style is not done loading"
+// を投げる。これが描画直後の連動ハイライト時に発生し、例外が波形描画まで巻き込んで
+// 消してしまっていた。投げても握りつぶし、読み込み完了後に一度だけ再適用する。
+function safeMapRestyle(update, indices, attempt = 0) {
+  const el = $("#mp-map");
+  if (!el || !el.data) return;
+  try {
+    Plotly.restyle(el, update, indices);
+  } catch (e) {
+    if (attempt < 20 && /style/i.test(e?.message || "")) {
+      setTimeout(() => safeMapRestyle(update, indices, attempt + 1), 150);
+    }
+    // それ以外の例外は握りつぶす (次の操作で反映される)
+  }
+}
+
 function highlightMapPoint(view, runIndex, idx) {
   const mapEl = $("#mp-map");
   if (!mapEl.data) return;
@@ -868,7 +889,7 @@ function highlightMapPoint(view, runIndex, idx) {
   const update = res.mode === "planar"
     ? { x: [[run.course.filledX[idx]]], y: [[run.course.filledY[idx]]], visible: true }
     : { lat: [[run.course.filledY[idx]]], lon: [[run.course.filledX[idx]]], visible: true };
-  Plotly.restyle("mp-map", update, [hi]);
+  safeMapRestyle(update, [hi]);
 }
 
 function verticalLine(x) {
@@ -1123,7 +1144,7 @@ function hideMapPoint(runIndex) {
   const mapEl = $("#mp-map");
   if (!mapEl.data) return;
   const hi = mapEl.data.findIndex((trace) => trace.meta?.highlightFor === runIndex);
-  if (hi >= 0) Plotly.restyle("mp-map", { visible: false }, [hi]);
+  if (hi >= 0) safeMapRestyle({ visible: false }, [hi]);
 }
 
 function restorePlaybackPosition() {

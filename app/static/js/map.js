@@ -93,6 +93,7 @@ $("#mp-dataset").addEventListener("change", async () => {
       ? ` (${esc(pair.lat_col)} / ${esc(pair.lon_col)})`
       : ` (座標列: ${(pair.coord_cols || []).map(esc).join(", ")} — 値から自動判定)`;
     const how = pair.match === "timestamp" ? "ファイル名の日時で自動ペア"
+      : pair.match === "tag" ? "タグで自動ペア"
       : "ファイル名で自動ペア";
     setPairStatus(`✅ GPS データ「${esc(pair.gps.name)}」を${how}${cols}`, "ok");
   } else {

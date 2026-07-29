@@ -98,6 +98,33 @@ def test_timestamp_pair_via_api(ingest_csv) -> None:
         assert pairs[0]["match"] == "timestamp"
 
 
+def test_tag_link_detects_gps_companion() -> None:
+    assert gps._tag_link(["トヨタ"], ["トヨタ_GPS"])
+    assert gps._tag_link(["トヨタ"], ["トヨタ-gps"])
+    assert gps._tag_link(["A社", "高速"], ["A社_位置"])
+    assert not gps._tag_link(["トヨタ"], ["ホンダ_GPS"])
+    assert not gps._tag_link([], ["トヨタ_GPS"])  # 信号側にタグが無ければ不成立
+
+
+def test_find_gps_pair_by_tag_only(ingest_csv) -> None:
+    # ファイル名では一致しないが、タグ トヨタ ↔ トヨタ_GPS で一意に決まる
+    sig = ingest_csv(SIG_CSV, filename="aaa.csv", tags=["トヨタ"])
+    ingest_csv(GPS_CSV, filename="bbb.csv", tags=["トヨタ_GPS"])
+    pair = gps.find_gps_pair(sig["id"])
+    assert pair is not None
+    assert pair["match"] == "tag"
+
+
+def test_tag_disambiguates_timestamp_matches(ingest_csv) -> None:
+    # 同時刻の GPS が2つあるとき、タグが一致する方 (トヨタ_GPS) を選ぶ
+    sig = ingest_csv(SIG_CSV, filename="260518_191805.csv", tags=["トヨタ"])
+    honda = ingest_csv(GPS_CSV, filename="honda_2026-05-18_19-18-05.csv", tags=["ホンダ_GPS"])
+    toyota = ingest_csv(GPS_CSV, filename="toyota_2026-05-18_19-18-05.csv", tags=["トヨタ_GPS"])
+    pair = gps.find_gps_pair(sig["id"])
+    assert pair["dataset"]["id"] == toyota["id"]
+    assert pair["dataset"]["id"] != honda["id"]
+
+
 def test_find_gps_pair_with_suffix(ingest_csv) -> None:
     sig = ingest_csv(SIG_CSV, filename="drive002.csv")
     ingest_csv(GPS_CSV, filename="drive002_gps.csv")  # 接尾辞つき

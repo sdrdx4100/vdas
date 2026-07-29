@@ -106,6 +106,29 @@ _TS_RE_YY = re.compile(r"(?<!\d)(\d{2})(\d{2})(\d{2})[-_ ]?(\d{2})(\d{2})(\d{2})
 TS_TOLERANCE_SEC = 2.0
 
 
+# タグでの突き合わせ: 信号側「トヨタ」 ↔ GPS側「トヨタ_GPS」のような対応。
+_TAG_GPS_SUFFIX_RE = re.compile(r"[_\-\s]*(gps|位置|pos(ition)?|loc(ation)?)$", re.IGNORECASE)
+
+
+def _norm_tags(tags: list[str] | None) -> set[str]:
+    return {str(t).strip().lower() for t in (tags or []) if str(t).strip()}
+
+
+def _tag_link(sig_tags: list[str] | None, gps_tags: list[str] | None) -> bool:
+    """GPS 側タグから GPS 接尾辞を外した基準が、信号側タグに含まれるか。
+
+    例: 信号 {"トヨタ"} と GPS {"トヨタ_GPS"} → True。
+    """
+    sig = _norm_tags(sig_tags)
+    if not sig:
+        return False
+    for g in _norm_tags(gps_tags):
+        base = _TAG_GPS_SUFFIX_RE.sub("", g).strip()
+        if base and base in sig:
+            return True
+    return False
+
+
 def _valid_dt(y: int, mo: int, d: int, h: int, mi: int, s: int) -> datetime | None:
     try:
         return datetime(y, mo, d, h, mi, s)
@@ -164,28 +187,38 @@ def find_gps_pair(dataset_id: str) -> dict[str, Any] | None:
     tname = target["original_filename"] or target["name"]
     base = _base_name(tname)
     tgt_ts = extract_timestamp(tname)
+    sig_tags = target.get("tags") or []
 
-    name_hit: dict[str, Any] | None = None
-    ts_hits: list[tuple[float, dict[str, Any]]] = []
+    # 各キーの候補を集める。タグ整合 (信号 X ↔ GPS X_GPS) は同点時の優先に使う。
+    name_hits: list[tuple[int, dict[str, Any]]] = []
+    ts_hits: list[tuple[int, float, dict[str, Any]]] = []
+    tag_hits: list[dict[str, Any]] = []
     for entry in list_gps_datasets():
         ds = entry["dataset"]
         if ds["id"] == dataset_id:
             continue
         cname = ds["original_filename"] or ds["name"]
+        linked = _tag_link(sig_tags, ds.get("tags") or [])
+        tag_rank = 0 if linked else 1  # タグが一致する候補を優先
         if _base_name(cname) == base:
-            if name_hit is None:  # list_datasets は新しい順なので先頭を採用
-                name_hit = {**entry, "match": "name"}
+            name_hits.append((tag_rank, {**entry, "match": "name"}))
         elif tgt_ts is not None:
             cts = extract_timestamp(cname)
-            if cts is not None:
-                delta = abs((cts - tgt_ts).total_seconds())
-                if delta <= TS_TOLERANCE_SEC:
-                    ts_hits.append((delta, {**entry, "match": "timestamp"}))
-    if name_hit is not None:
-        return name_hit
+            if cts is not None and abs((cts - tgt_ts).total_seconds()) <= TS_TOLERANCE_SEC:
+                ts_hits.append((tag_rank, abs((cts - tgt_ts).total_seconds()),
+                                {**entry, "match": "timestamp"}))
+        if linked:
+            tag_hits.append({**entry, "match": "tag"})
+
+    # ①名前一致 → ②日時一致 → ③タグだけで一意に決まる場合
+    if name_hits:
+        name_hits.sort(key=lambda x: x[0])
+        return name_hits[0][1]
     if ts_hits:
-        ts_hits.sort(key=lambda x: x[0])  # 時刻差が最小の候補を採用
-        return ts_hits[0][1]
+        ts_hits.sort(key=lambda x: (x[0], x[1]))  # タグ整合 → 時刻差の小さい順
+        return ts_hits[0][2]
+    if len(tag_hits) == 1:  # X ↔ X_GPS が1件ずつのときだけタグで確定
+        return tag_hits[0]
     return None
 
 

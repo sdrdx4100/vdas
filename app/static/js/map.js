@@ -364,11 +364,15 @@ export async function plotMap(auto = false) {
     });
     let requestB = null;
     let signalRequestB = null;
+    let requestBError = null;
     if (dsIdB) {
       const columnsB = new Set((state.mp.schemaB?.columns || []).map((c) => c.name));
       const signalsB = selectedA.filter((name) => columnsB.has(name));
       signalRequestB = withSpeedAssist(state.mp.schemaB, signalsB);
       const filtersB = filters.filter((f) => columnsB.has(f.column));
+      // .catch を作成と同じ tick で付けておく (await requestA の完了を待つ間に
+      // requestB が失敗すると、後から catch してもブラウザに未処理rejectionとして
+      // 検出されてしまうため)。失敗時は null を返し、理由は requestBError に控える。
       requestB = requestTrack(dsIdB, {
         signals: signalRequestB.signals,
         color_signal: null,
@@ -377,13 +381,21 @@ export async function plotMap(auto = false) {
         lon_col: null,
         filters: filtersB,
         max_points: +$("#mp-maxpoints").value || 5000,
+      }).catch((e) => {
+        requestBError = e;
+        return null;
       });
     }
-    const [res, resB] = await Promise.all([requestA, requestB]);
+    // 走行 A が取れなければ何も表示できないので致命的エラーとして扱う。
+    // 走行 B は失敗しても A だけで表示を続ける (二走行比較で片方だけ失敗して
+    // 画面全体が真っ白になっていた問題への対応)。
+    const res = await requestA;
     detachSpeedAssist(res, signalRequestA.assist);
-    if (resB) detachSpeedAssist(resB, signalRequestB?.assist);
-    if (resB && res.mode !== resB.mode) {
-      throw new Error("走行 A と B の座標形式が異なるため重ねて表示できません。");
+    let resB = requestB ? await requestB : null;
+    if (requestB && resB) {
+      detachSpeedAssist(resB, signalRequestB?.assist);
+    } else if (requestB && !resB) {
+      toast(`走行 B の取得に失敗しました: ${requestBError?.message} (走行 A のみ表示します)`, "error");
     }
     const view = buildTrackView(res, resB);
     if (requestId !== mpRequestId) return;
@@ -394,6 +406,12 @@ export async function plotMap(auto = false) {
     const modeChip = res.mode === "planar"
       ? `<span class="chip">平面座標 (${esc(res.px_col)} / ${esc(res.py_col)})</span>`
       : `<span class="chip">地図 (緯度 ${esc(res.lat_col)} / 経度 ${esc(res.lon_col)})</span>`;
+    const alignChip = res.align_mode === "time"
+      ? '<span class="chip" title="GPSと信号の記録開始時刻・サンプリング周期のズレを補正して対応づけました">🕒 時刻ベースで整列</span> '
+      : "";
+    const mismatchChip = view.mapMismatch
+      ? '<span class="chip" style="color:var(--warn, #b8860b);">⚠ 走行Bは座標形式が異なるため地図には表示していません (波形は比較表示)</span> '
+      : "";
     $("#mp-meta").innerHTML =
       `<span class="chip accent">走行 A: ${esc(res.signal_dataset.name)} / ${fmtNum(res.returned_rows)} 点</span> ` +
       (resB ? `<span class="chip">走行 B: ${esc(resB.signal_dataset.name)} / ${fmtNum(resB.returned_rows)} 点</span> ` : "") +
@@ -401,7 +419,7 @@ export async function plotMap(auto = false) {
         ? `<span class="chip">GPS補間 A:${fmtNum(view.runs[0].course.estimatedCount)}点` +
           (resB ? ` / B:${fmtNum(view.runs[1].course.estimatedCount)}点` : "") + "</span> "
         : "") +
-      `<span class="chip">GPS: ${esc(res.gps_dataset.name)}</span> ${modeChip}`;
+      `<span class="chip">GPS: ${esc(res.gps_dataset.name)}</span> ${modeChip} ${alignChip}${mismatchChip}`;
     renderChart("mp-map", () => renderMap(view));
     renderChart("mp-wave", () => renderWave(view));
     // 連動・再生の初期化で万一エラーが出ても、描画済みのグラフは消さない
@@ -447,28 +465,33 @@ function buildTrackView(primary, secondary = null) {
   const primaryTimes = timelineSeconds(primary);
   const runs = [
     { key: "a", label: "走行 A", res: primary, times: primaryTimes, color: colors[0],
-      course: buildCourseAxis(primary, primaryTimes) },
+      course: buildCourseAxis(primary, primaryTimes), mapCompatible: true },
   ];
+  // 走行Bの座標形式 (地図/平面) がAと違うと地図には重ねられない。波形比較は
+  // 座標形式に関係なく使えるので、地図だけ諦めて全体を消さないようにする。
+  const mapMismatch = !!secondary && secondary.mode !== primary.mode;
   if (secondary) {
     const secondaryTimes = timelineSeconds(secondary);
     runs.push({ key: "b", label: "走行 B", res: secondary,
       times: secondaryTimes, color: colors[1],
-      course: buildCourseAxis(secondary, secondaryTimes) });
-    if (runs.every((run) => run.course.usable)) {
+      course: buildCourseAxis(secondary, secondaryTimes), mapCompatible: !mapMismatch });
+    if (!mapMismatch && runs.every((run) => run.course.usable)) {
       runs[1].course.localProgress = runs[1].course.progress;
       runs[1].course.progress = matchCourseProgress(runs[0], runs[1]);
     }
   }
   const view = {
-    primary, secondary, runs, mode: primary.mode, offsetB: 0,
+    primary, secondary, runs, mode: primary.mode, offsetB: 0, mapMismatch,
     timeUnit: primary.x && secondary?.x ? "秒" : "サンプル",
     syncMode: secondary ? $("#mp-sync-mode").value : "manual",
   };
-  if (view.syncMode === "course" && runs.some((run) => !run.course.usable)) {
+  if (view.syncMode === "course" && (mapMismatch || runs.some((run) => !run.course.usable))) {
     view.syncMode = "manual";
     $("#mp-sync-mode").value = "manual";
     updateSyncHint();
-    toast("GPS実測点が不足しているため、時間・手動同期に切り替えました。", "error");
+    toast(mapMismatch
+      ? "走行 A と B で座標形式が異なるため、コース位置同期は使えません。時間・手動同期に切り替えました。"
+      : "GPS実測点が不足しているため、時間・手動同期に切り替えました。", "error");
   }
   const alignment = $("#mp-alignment");
   alignment.hidden = !secondary || view.syncMode === "course";
@@ -698,9 +721,12 @@ function mapColorSpec(res, comparison) {
 
 // 緯度経度 → 実地図タイル上に軌跡を描く
 function renderGeographic(view) {
-  const comparison = view.runs.length > 1;
+  // 座標形式が違って地図に出せない走行は比較のうちに数えない
+  // (A単独になるなら、通常どおり信号・高度での色分けを許す)
+  const comparison = view.runs.filter((run) => run.mapCompatible).length > 1;
   const traces = [];
   for (const [runIndex, run] of view.runs.entries()) {
+    if (!run.mapCompatible) continue;  // 座標形式が違う走行は地図に重ねない (波形では比較する)
     const res = run.res;
     const cspec = mapColorSpec(res, comparison);
     const hasColor = !!cspec;
@@ -750,9 +776,12 @@ function renderGeographic(view) {
 
 // ローカル座標 (メートル等) → 等尺の平面軌跡として描く
 function renderPlanar(view) {
-  const comparison = view.runs.length > 1;
+  // 座標形式が違って地図に出せない走行は比較のうちに数えない
+  // (A単独になるなら、通常どおり信号・高度での色分けを許す)
+  const comparison = view.runs.filter((run) => run.mapCompatible).length > 1;
   const traces = [];
   for (const [runIndex, run] of view.runs.entries()) {
+    if (!run.mapCompatible) continue;  // 座標形式が違う走行は地図に重ねない (波形では比較する)
     const res = run.res;
     const cspec = mapColorSpec(res, comparison);
     const hasColor = !!cspec;

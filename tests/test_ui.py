@@ -86,4 +86,10 @@ def test_analysis_workspace_and_modules_are_served() -> None:
         assert "function safeMapRestyle" in map_js
         assert "wireLinkedCursor(view)" in map_js
 
+        # 走行Bの取得失敗や座標形式の不一致で画面全体が消えないこと
+        # (Aだけでも表示を続け、波形比較は座標形式に関係なく維持する)
+        assert "走行 B の取得に失敗しました" in map_js
+        assert "mapCompatible" in map_js
+        assert "座標形式が異なるため重ねて表示できません" not in map_js
+
         assert client.get("/static/js/compare.js").status_code == 404

@@ -205,6 +205,43 @@ def test_map_track_aligns_by_rowindex(ingest_csv) -> None:
     assert 35.0 <= res["center"]["lat"] <= 35.04
 
 
+def test_map_track_aligns_by_time_when_row_position_disagrees(ingest_csv) -> None:
+    """B社ケース: 行数が一致せず記録開始も数秒ずれているが、GPS側にも
+    経過時間列があり双方のファイル名から実開始時刻が分かる場合は、
+    rowid の位置ではなく実際の時刻が近い行同士を対応づける。"""
+    sig = ingest_csv(
+        "time,speed\n0,10\n1,20\n2,30\n3,40\n4,50\n",
+        filename="260518_191805.csv")  # 開始 19:18:05, 5行
+    gpx = ingest_csv(
+        "time,latitude,longitude\n"
+        "0,35.00,139.00\n1,35.01,139.01\n2,35.02,139.02\n"
+        "3,35.03,139.03\n4,35.04,139.04\n5,35.05,139.05\n",
+        filename="gps_2026-05-18_19-18-08.csv")  # 開始 19:18:08 (3秒後), 6行
+    res = gps.map_track(sig["id"], signals=["speed"], gps_id=gpx["id"])
+    assert res["align_mode"] == "time"
+    # rowid のままなら [35.00,35.01,35.02,35.03,35.04] になるはずだが、
+    # 実時刻では信号側の各行はGPS開始(19:18:08)より前 or 同時刻の点に
+    # 最も近く、最後の行だけが次の点(35.01)に対応する。
+    assert res["lat"] == [35.00, 35.00, 35.00, 35.00, 35.01]
+    assert res["signals"]["speed"] == [10, 20, 30, 40, 50]
+
+
+def test_map_track_falls_back_to_rowid_when_times_disagree_too_much(ingest_csv) -> None:
+    """時刻情報はあっても月単位でズレている (パース失敗などで信頼できない)
+    場合は、時刻整列を諦めて従来の rowid 結合にフォールバックする。"""
+    sig = ingest_csv(
+        "time,speed\n0,10\n1,20\n2,30\n3,40\n4,50\n",
+        filename="260101_000000.csv")
+    gpx = ingest_csv(
+        "time,latitude,longitude\n"
+        "0,35.00,139.00\n1,35.01,139.01\n2,35.02,139.02\n"
+        "3,35.03,139.03\n4,35.04,139.04\n",
+        filename="gps_2026-06-01_00-00-00.csv")
+    res = gps.map_track(sig["id"], signals=["speed"], gps_id=gpx["id"])
+    assert res["align_mode"] == "rowid"
+    assert res["lat"] == [35.00, 35.01, 35.02, 35.03, 35.04]
+
+
 def test_stitched_signal_and_gps_logs_pair_and_plot(ingest_csv) -> None:
     """3分割された信号/GPSを同じ順で結合すれば、1走行として自動ペアできる。"""
     signal_parts = [

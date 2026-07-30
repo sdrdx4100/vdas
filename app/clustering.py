@@ -15,7 +15,7 @@ import pandas as pd
 from sklearn.cluster import KMeans
 
 from . import db
-from .ingest import dataset_schema, get_dataset
+from .ingest import _invalidate_schema_cache, dataset_schema, get_dataset
 from .queries import QueryError, _quote
 
 MAX_FIT_SAMPLE = 100_000
@@ -96,6 +96,7 @@ def run_clustering(dataset_id: str, features: list[str], k: int = 4,
 
     db.meta_execute("UPDATE datasets SET column_count = ? WHERE id = ?",
                     (new_col_count, dataset_id))
+    _invalidate_schema_cache(dataset_id)
 
     # --- クラスタごとのプロファイル (元の単位での平均) ---
     sizes = np.bincount(labels, minlength=k)

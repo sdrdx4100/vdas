@@ -15,10 +15,13 @@ GPS は信号ログとは別ファイル (同名の Parquet) として記録さ�
 """
 from __future__ import annotations
 
+import bisect
 import math
 import re
 from datetime import datetime
 from typing import Any
+
+import pandas as pd
 
 from . import db
 from .ingest import dataset_schema, get_dataset, list_datasets
@@ -44,6 +47,12 @@ _COORD_AXIS_RE = re.compile(
 
 # ペア判定でファイル名から取り除く GPS 由来の接尾辞
 _GPS_SUFFIX_RE = re.compile(r"[_\-\s]*(gps|pos(ition)?|loc(ation)?|latlon|track|位置)$", re.IGNORECASE)
+
+# 経過時間・時刻らしい列名
+_TIME_NAME_RE = re.compile(r"time|date|時刻|時間", re.IGNORECASE)
+
+# 時刻整列のズレの中央値がこれを超えたら信頼できないとみなし rowid 結合にフォールバックする (秒)
+TIME_ALIGN_MAX_MEDIAN_DT_SEC = 30.0
 
 
 def _numeric_names(columns: list[dict[str, Any]]) -> set[str]:
@@ -176,24 +185,32 @@ def list_gps_datasets() -> list[dict[str, Any]]:
     return out
 
 
-def find_gps_pair(dataset_id: str) -> dict[str, Any] | None:
+def find_gps_pair(dataset_id: str,
+                  gps_list: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
     """信号データセットに対応する GPS データセットを探す。
 
     ①ファイル名の基準名一致 (A社のように同名で保存されている場合) を優先し、
     無ければ②ファイル名に埋め込まれた記録開始日時の一致で突き合わせる
     (B社のように GPS と信号で命名規則が違っても、同じ時刻なら自動ペア)。
+
+    `gps_list` は呼び出し側 (gps_pairs など) が既に持っている GPS 一覧を
+    使い回すための引数。省略時は自前で1回だけ計算する (毎回列スキーマを
+    読み直すと、全データセットをループする呼び出し元では件数の2乗の
+    コストになってしまうため)。
     """
     target = get_dataset(dataset_id)
     tname = target["original_filename"] or target["name"]
     base = _base_name(tname)
     tgt_ts = extract_timestamp(tname)
     sig_tags = target.get("tags") or []
+    if gps_list is None:
+        gps_list = list_gps_datasets()
 
     # 各キーの候補を集める。タグ整合 (信号 X ↔ GPS X_GPS) は同点時の優先に使う。
     name_hits: list[tuple[int, dict[str, Any]]] = []
     ts_hits: list[tuple[int, float, dict[str, Any]]] = []
     tag_hits: list[dict[str, Any]] = []
-    for entry in list_gps_datasets():
+    for entry in gps_list:
         ds = entry["dataset"]
         if ds["id"] == dataset_id:
             continue
@@ -222,15 +239,16 @@ def find_gps_pair(dataset_id: str) -> dict[str, Any] | None:
     return None
 
 
-def gps_pairs() -> list[dict[str, Any]]:
+def gps_pairs(gps_list: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     """信号データセット × GPS データセットの自動ペア一覧を返す。"""
-    gps_list = list_gps_datasets()
+    if gps_list is None:
+        gps_list = list_gps_datasets()
     gps_ids = {e["dataset"]["id"] for e in gps_list}
     pairs = []
     for ds in list_datasets():
         if ds["id"] in gps_ids:
             continue  # GPS そのものは信号側候補にしない
-        pair = find_gps_pair(ds["id"])
+        pair = find_gps_pair(ds["id"], gps_list=gps_list)
         if pair:
             pairs.append({
                 "signal": ds,
@@ -325,12 +343,13 @@ def similar_runs(signal_id: str, limit: int = 10) -> dict[str, Any]:
     緯度経度とローカル座標は混ぜず、同じ会社タグは補助根拠として扱う。
     """
     get_dataset(signal_id)  # 存在チェック
-    ref_pair = find_gps_pair(signal_id)
+    gps_list = list_gps_datasets()
+    ref_pair = find_gps_pair(signal_id, gps_list=gps_list)
     ref = _route_extent(ref_pair["dataset"]["id"]) if ref_pair else None
     ref_tags = _norm_tags(get_dataset(signal_id).get("tags"))
 
     runs = []
-    for pair in gps_pairs():
+    for pair in gps_pairs(gps_list=gps_list):
         sig = pair["signal"]
         if sig["id"] == signal_id:
             continue
@@ -413,6 +432,66 @@ def _assign_latlon(name_a: str, a: list[float], name_b: str,
     return (name_a, name_b) if amean <= bmean else (name_b, name_a)
 
 
+def _time_seconds_expr(dataset_id: str) -> str | None:
+    """絶対時刻をエポック秒で返す SQL 式を返す。解決できなければ None。
+
+    temporal 型の列があればそれをそのまま使う。無ければ、経過時間らしい
+    数値列とファイル名から推定した記録開始日時 (extract_timestamp) を
+    合成して疑似絶対時刻とする。GPS と信号で記録開始が数秒ずれていても、
+    それぞれの実際の開始時刻を基準にするためズレが吸収される。
+    """
+    schema = dataset_schema(dataset_id)
+    cols = schema["columns"]
+    temporal = next((c["name"] for c in cols if c["kind"] == "temporal"), None)
+    if temporal:
+        return f"epoch({_quote(temporal)})"
+    elapsed = next((c["name"] for c in cols
+                    if c["kind"] == "numeric" and _TIME_NAME_RE.search(c["name"])), None)
+    if not elapsed:
+        return None
+    ds = schema["dataset"]
+    start = extract_timestamp(ds["original_filename"] or ds["name"])
+    if not start:
+        return None
+    return f"{start.timestamp()!r} + {_quote(elapsed)}"
+
+
+def _time_based_row_map(con: Any, sig_table: str, sig_time_expr: str, sig_where: str,
+                        sig_params: tuple[Any, ...], gps_table: str,
+                        gps_time_expr: str) -> list[tuple[Any, Any]] | None:
+    """信号側の各行 (フィルタ後) を、実際の時刻が最も近い GPS 側の rowid に
+    対応づける (行位置がずれていても、記録開始日時・サンプリング周期の
+    違いを吸収できる)。ズレの中央値が大きすぎる場合は信頼できないと
+    みなし None を返す (呼び出し側は rowid 結合にフォールバックする)。
+    """
+    sig_rows = con.execute(
+        f"SELECT rowid, {sig_time_expr} FROM {_quote(sig_table)}{sig_where} ORDER BY rowid",
+        sig_params).fetchall()
+    gps_rows = con.execute(
+        f"SELECT rowid, {gps_time_expr} FROM {_quote(gps_table)} ORDER BY 2").fetchall()
+    if not sig_rows or not gps_rows:
+        return None
+    if any(r[1] is None for r in sig_rows) or any(r[1] is None for r in gps_rows):
+        return None
+    gps_rids = [r[0] for r in gps_rows]
+    gps_times = [r[1] for r in gps_rows]
+
+    mapping: list[tuple[Any, Any]] = []
+    deltas: list[float] = []
+    for sig_rid, sig_t in sig_rows:
+        i = bisect.bisect_left(gps_times, sig_t)
+        candidates = [j for j in (i - 1, i) if 0 <= j < len(gps_times)]
+        best = min(candidates, key=lambda j: abs(gps_times[j] - sig_t))
+        mapping.append((sig_rid, gps_rids[best]))
+        deltas.append(abs(gps_times[best] - sig_t))
+
+    deltas.sort()
+    median_dt = deltas[len(deltas) // 2]
+    if median_dt > TIME_ALIGN_MAX_MEDIAN_DT_SEC:
+        return None
+    return mapping
+
+
 def map_track(dataset_id: str, signals: list[str] | None = None,
               color_signal: str | None = None, x: str | None = None,
               gps_id: str | None = None, lat_col: str | None = None,
@@ -474,7 +553,7 @@ def map_track(dataset_id: str, signals: list[str] | None = None,
     if not x:
         x = next((c["name"] for c in dataset_schema(dataset_id)["columns"]
                   if c["kind"] == "temporal"), None) \
-            or next((n for n in sig_cols if re.search(r"time|date|時刻|時間", n, re.IGNORECASE)), None)
+            or next((n for n in sig_cols if _TIME_NAME_RE.search(n)), None)
     if x and x not in sig_cols:
         raise QueryError(f"信号データに列がありません: {x}")
 
@@ -495,20 +574,46 @@ def map_track(dataset_id: str, signals: list[str] | None = None,
     inner_sel = ", ".join(_quote(c) for c in sel_cols)
     inner_sel = (inner_sel + ", ") if inner_sel else ""
 
+    # --- GPS と信号の対応づけ ---
+    # 既定は行位置 (rowid) の 1:1 対応 (同時刻・同サンプリング周期が前提)。
+    # 双方に実時刻 (temporal 列、または経過時間+ファイル名の記録開始日時)
+    # が分かる場合は、実際の時刻が最も近い行同士を対応づける方式に切り替える。
+    # これにより、記録開始が数秒ずれていたり行数が完全一致しない場合でも
+    # 正しく対応づけられる (行位置だけを信じると静かにズレてしまうため)。
+    align_mode = "rowid"
     with db.duck() as con:
-        total = con.execute(
-            f"SELECT count(*) FROM (SELECT rowid AS __r FROM {_quote(sig_table)}{where}) f "
-            f"JOIN {_quote(gps_table)} g ON f.__r = g.rowid", params).fetchone()[0]
-        if not total:
-            raise QueryError("結合できる行がありません (GPS と信号の行位置が一致していない可能性があります)")
-        stride = max(1, math.ceil(total / limit))
-        out_cols = [f"f.{_quote(c)}" for c in sel_cols] + [f"g.{_quote(c)}" for c in fetch_coords]
-        rows = con.execute(
-            f"SELECT f.__r, {', '.join(out_cols)} FROM ("
-            f"  SELECT rowid AS __r, {inner_sel}row_number() OVER (ORDER BY rowid) AS __rn"
-            f"  FROM {_quote(sig_table)}{where}"
-            f") f JOIN {_quote(gps_table)} g ON f.__r = g.rowid "
-            f"WHERE (f.__rn - 1) % {stride} = 0 ORDER BY f.__r", params).fetchall()
+        sig_time_expr = _time_seconds_expr(dataset_id)
+        gps_time_expr = _time_seconds_expr(gps_id)
+        row_map = None
+        if sig_time_expr and gps_time_expr:
+            row_map = _time_based_row_map(
+                con, sig_table, sig_time_expr, where, params, gps_table, gps_time_expr)
+        try:
+            if row_map:
+                align_mode = "time"
+                con.register("__gps_align_map", pd.DataFrame(row_map, columns=["sig_r", "gps_r"]))
+                join_clause = (f'JOIN __gps_align_map m ON f.__r = m.sig_r '
+                              f'JOIN {_quote(gps_table)} g ON g.rowid = m.gps_r')
+            else:
+                join_clause = f'JOIN {_quote(gps_table)} g ON f.__r = g.rowid'
+
+            total = con.execute(
+                f"SELECT count(*) FROM (SELECT rowid AS __r FROM {_quote(sig_table)}{where}) f "
+                f"{join_clause}", params).fetchone()[0]
+            if not total:
+                raise QueryError(
+                    "結合できる行がありません (GPS と信号の行位置・時刻が一致していない可能性があります)")
+            stride = max(1, math.ceil(total / limit))
+            out_cols = [f"f.{_quote(c)}" for c in sel_cols] + [f"g.{_quote(c)}" for c in fetch_coords]
+            rows = con.execute(
+                f"SELECT f.__r, {', '.join(out_cols)} FROM ("
+                f"  SELECT rowid AS __r, {inner_sel}row_number() OVER (ORDER BY rowid) AS __rn"
+                f"  FROM {_quote(sig_table)}{where}"
+                f") f {join_clause} "
+                f"WHERE (f.__rn - 1) % {stride} = 0 ORDER BY f.__r", params).fetchall()
+        finally:
+            if row_map:
+                con.unregister("__gps_align_map")
 
     # 列の並び: __r, [sel_cols...], [fetch_coords...]
     index = [r[0] for r in rows]
@@ -555,6 +660,7 @@ def map_track(dataset_id: str, signals: list[str] | None = None,
         "signal_dataset": signal_ds,
         "gps_dataset": gps_ds,
         "x": x,
+        "align_mode": align_mode,
         "total_rows": total, "returned_rows": len(rows), "stride": stride,
         "index": index,
         "x_values": col_at.get(x) if x else None,

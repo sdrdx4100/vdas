@@ -167,6 +167,7 @@ def delete_dataset(dataset_id: str) -> None:
         con.execute(f'DROP TABLE IF EXISTS "{ds["table_name"]}"')
     Path(ds["stored_path"]).unlink(missing_ok=True)
     db.meta_execute("DELETE FROM datasets WHERE id = ?", (dataset_id,))
+    _invalidate_schema_cache(dataset_id)
 
 
 def bulk_delete(dataset_ids: list[str]) -> dict[str, Any]:
@@ -190,26 +191,43 @@ def delete_all(include_views: bool = False) -> dict[str, Any]:
         db.meta_execute("DELETE FROM saved_views")
         db.meta_execute("DELETE FROM label_sets")
     db.reset_duckdb()
+    _invalidate_schema_cache()
     return {"deleted": len(datasets), "views_deleted": include_views}
+
+
+# 列一覧 (DESCRIBE) のキャッシュ。テーブル構造は削除・クラスタリングの
+# 書き戻し以外では変わらないため、dataset_id ごとに使い回す。
+# (行数・タグなど頻繁に変わる情報は get_dataset() 側で毎回取り直す)
+_schema_cache: dict[str, list[dict[str, Any]]] = {}
+
+
+def _invalidate_schema_cache(dataset_id: str | None = None) -> None:
+    if dataset_id is None:
+        _schema_cache.clear()
+    else:
+        _schema_cache.pop(dataset_id, None)
 
 
 def dataset_schema(dataset_id: str) -> dict[str, Any]:
     ds = get_dataset(dataset_id)
-    with db.duck() as con:
-        described = con.execute(f'DESCRIBE "{ds["table_name"]}"').fetchall()
-    numeric_prefixes = ("TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT",
-                        "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT",
-                        "FLOAT", "DOUBLE", "DECIMAL")
-    temporal_prefixes = ("DATE", "TIME", "TIMESTAMP")
-    columns = []
-    for row in described:
-        col_name, col_type = row[0], row[1]
-        upper = col_type.upper()
-        if upper.startswith(numeric_prefixes):
-            kind = "numeric"
-        elif upper.startswith(temporal_prefixes):
-            kind = "temporal"
-        else:
-            kind = "other"
-        columns.append({"name": col_name, "type": col_type, "kind": kind})
+    columns = _schema_cache.get(dataset_id)
+    if columns is None:
+        with db.duck() as con:
+            described = con.execute(f'DESCRIBE "{ds["table_name"]}"').fetchall()
+        numeric_prefixes = ("TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT",
+                            "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT",
+                            "FLOAT", "DOUBLE", "DECIMAL")
+        temporal_prefixes = ("DATE", "TIME", "TIMESTAMP")
+        columns = []
+        for row in described:
+            col_name, col_type = row[0], row[1]
+            upper = col_type.upper()
+            if upper.startswith(numeric_prefixes):
+                kind = "numeric"
+            elif upper.startswith(temporal_prefixes):
+                kind = "temporal"
+            else:
+                kind = "other"
+            columns.append({"name": col_name, "type": col_type, "kind": kind})
+        _schema_cache[dataset_id] = columns
     return {"dataset": ds, "columns": columns}

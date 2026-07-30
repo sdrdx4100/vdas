@@ -73,6 +73,37 @@ def test_saved_view_and_labelset_round_trip(ingest_csv) -> None:
         assert client.get("/api/labelsets").json()[0]["columns"] == ["speed"]
 
 
+def test_signal_alias_crud_and_dedup() -> None:
+    with TestClient(app) as client:
+        first = client.post("/api/signal-aliases",
+                            json={"canonical_name": "車速", "column_name": "speed"})
+        assert first.status_code == 200
+        second = client.post("/api/signal-aliases",
+                             json={"canonical_name": "車速", "column_name": "車速"})
+        assert second.status_code == 200
+
+        listed = client.get("/api/signal-aliases").json()
+        assert {(r["canonical_name"], r["column_name"]) for r in listed} == {
+            ("車速", "speed"), ("車速", "車速")}
+
+        # 同じ組み合わせを再登録しても重複しない
+        dup = client.post("/api/signal-aliases",
+                          json={"canonical_name": "車速", "column_name": "speed"})
+        assert dup.status_code == 200
+        assert dup.json()["id"] == first.json()["id"]
+        assert len(client.get("/api/signal-aliases").json()) == 2
+
+        deleted = client.delete(f"/api/signal-aliases/{first.json()['id']}")
+        assert deleted.status_code == 200
+        assert len(client.get("/api/signal-aliases").json()) == 1
+
+
+def test_signal_alias_rejects_blank_names() -> None:
+    with TestClient(app) as client:
+        resp = client.post("/api/signal-aliases", json={"canonical_name": " ", "column_name": "speed"})
+        assert resp.status_code == 400
+
+
 def test_bulk_tag_and_delete_endpoints(ingest_csv) -> None:
     first = ingest_csv(CSV.decode("utf-8"), filename="first.csv")
     second = ingest_csv(CSV.decode("utf-8"), filename="second.csv")

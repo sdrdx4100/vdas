@@ -482,6 +482,7 @@
         <label class="field">GPS データセット B
           <select id="mp-gps-b" style="min-width:220px;" disabled><option value="">自動 (同名から判定)</option></select>
         </label>
+        <button class="btn subtle" id="mp-alias-manage" title="会社によって列名が違う信号 (例: speed / 車速) を対応付けます" style="align-self:flex-end;">⚙ 信号名の対応付け</button>
       </div>
       <div id="mp-pair-status-b" style="margin:4px 0 0; font-size:12px; color:var(--text-secondary);"></div>
       <div id="mp-cmp-hint" style="margin:6px 0 0; font-size:12px; color:var(--text-secondary);" hidden></div>
@@ -564,6 +565,7 @@
         <label class="field">走行B (比較・任意)
           <select id="tc-dataset-b" style="min-width:220px;"><option value="">なし (1走行のみ)</option></select>
         </label>
+        <button class="btn subtle" id="tc-alias-manage" title="会社によって列名が違う信号 (例: speed / 車速) を対応付けます" style="align-self:flex-end;">⚙ 信号名の対応付け</button>
         <label class="field">整列軸 (横軸)
           <select id="tc-xmode" style="min-width:180px;">
             <option value="ref">基準信号を横軸</option>
@@ -731,6 +733,27 @@
     <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:18px;">
       <button class="btn" id="concatmodal-cancel">キャンセル</button>
       <button class="btn primary" id="concatmodal-save">🔗 結合する</button>
+    </div>
+  </div>
+</div>
+
+<!-- 信号名エイリアス管理モーダル (会社ごとに異なる列名の対応付け) -->
+<div id="alias-backdrop" class="modal-backdrop" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true" style="min-width:420px;">
+    <h2 style="margin:0 0 6px; font-size:16px;">信号名の対応付け</h2>
+    <p style="margin:0 0 12px; font-size:12px; color:var(--text-secondary);">車速・回転数など、会社によって列名が違う信号を同じグループにまとめると、2走行比較で列名が完全一致しなくても重ねて表示できます。</p>
+    <div id="aliasmodal-list" style="max-height:280px; overflow-y:auto; margin-bottom:14px;"></div>
+    <div class="controls-row">
+      <label class="field">グループ名 (例: 車速)
+        <input type="text" id="aliasmodal-group" style="width:160px;" placeholder="車速">
+      </label>
+      <label class="field">列名 (例: speed)
+        <input type="text" id="aliasmodal-column" style="width:160px;" placeholder="speed">
+      </label>
+      <button class="btn" id="aliasmodal-add" style="align-self:flex-end;">＋ 追加</button>
+    </div>
+    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:18px;">
+      <button class="btn primary" id="aliasmodal-close">閉じる</button>
     </div>
   </div>
 </div>

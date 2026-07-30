@@ -4,6 +4,10 @@ import { state } from "./state.js";
 import { loadSchema, columnOptions, renderFilters, activeFilters } from "./filters.js";
 import { seriesColors, baseLayout, PLOT_CONFIG, renderChart, chartRegistry, cssVar } from "./charts.js";
 import { openNameDialog } from "./modals.js";
+import { loadAliases, openAliasManager, resolveColumn } from "./aliases.js";
+
+$("#mp-alias-manage").addEventListener("click", () => openAliasManager());
+loadAliases();
 
 const mapAutoPlot = debounce(() => plotMap(true), 500);
 state.mp.onChange = mapAutoPlot;
@@ -378,11 +382,28 @@ export async function plotMap(auto = false) {
     let requestB = null;
     let signalRequestB = null;
     let requestBError = null;
+    let bToDisplayName = null;
     if (dsIdB) {
       const columnsB = new Set((state.mp.schemaB?.columns || []).map((c) => c.name));
-      const signalsB = selectedA.filter((name) => columnsB.has(name));
+      const aliasList = await loadAliases();
+      // 列名がAと完全一致しなくても、エイリアスで同じ意味と分かっていれば
+      // Bの実列名で要求し、結果は表示上Aの列名に戻す (renameSignalsToDisplayName)。
+      bToDisplayName = new Map();
+      const signalsB = [];
+      for (const name of selectedA) {
+        const resolved = resolveColumn(name, columnsB, aliasList);
+        if (resolved) {
+          signalsB.push(resolved);
+          bToDisplayName.set(resolved, name);
+        }
+      }
       signalRequestB = withSpeedAssist(state.mp.schemaB, signalsB);
-      const filtersB = filters.filter((f) => columnsB.has(f.column));
+      const filtersB = filters
+        .map((f) => {
+          const resolved = resolveColumn(f.column, columnsB, aliasList);
+          return resolved ? { ...f, column: resolved } : null;
+        })
+        .filter(Boolean);
       // .catch を作成と同じ tick で付けておく (await requestA の完了を待つ間に
       // requestB が失敗すると、後から catch してもブラウザに未処理rejectionとして
       // 検出されてしまうため)。失敗時は null を返し、理由は requestBError に控える。
@@ -407,6 +428,15 @@ export async function plotMap(auto = false) {
     let resB = requestB ? await requestB : null;
     if (requestB && resB) {
       detachSpeedAssist(resB, signalRequestB?.assist);
+      // Bの実列名(エイリアス解決済み)をAの表示名に戻し、renderWave等が
+      // 列名の完全一致を前提にしていても重ねて表示できるようにする。
+      if (bToDisplayName?.size) {
+        const renamed = {};
+        for (const [key, values] of Object.entries(resB.signals)) {
+          renamed[bToDisplayName.get(key) || key] = values;
+        }
+        resB.signals = renamed;
+      }
     } else if (requestB && !resB) {
       toast(`走行 B の取得に失敗しました: ${requestBError?.message} (走行 A のみ表示します)`, "error");
     }

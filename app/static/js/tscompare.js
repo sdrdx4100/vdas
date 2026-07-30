@@ -4,6 +4,10 @@ import { $, $$, api, toast, debounce, fmtNum, esc } from "./api.js";
 import { state } from "./state.js";
 import { loadSchema, columnOptions, renderFilters, activeFilters } from "./filters.js";
 import { seriesColors, baseLayout, PLOT_CONFIG, renderChart, chartRegistry, cssVar } from "./charts.js";
+import { loadAliases, openAliasManager, resolveColumn } from "./aliases.js";
+
+$("#tc-alias-manage").addEventListener("click", () => openAliasManager());
+loadAliases();
 
 const tcAuto = debounce(() => plot(true), 500);
 state.tc.onChange = tcAuto;
@@ -195,16 +199,43 @@ async function plot(auto = false) {
   const req = ++tcReq;
   setLoading(true);
   try {
+    const aliasList = await loadAliases();
     const results = [];
     for (const r of runs) {
-      if (!schemaCols(r.schema).has(xcol)) {
+      const rColSet = new Set(schemaCols(r.schema).keys());
+      // 列名がAと完全一致しなくても、エイリアスで同じ意味と分かっていれば
+      // その走行の実列名で要求し、結果はAの列名(canonical)に戻して統一する。
+      const rXcol = resolveColumn(xcol, rColSet, aliasList);
+      if (!rXcol) {
         if (r.primary) throw new Error(`横軸の列「${xcol}」が走行Aにありません`);
-        toast(`走行Bに列「${xcol}」が無いため重ねられません`, "error");
+        toast(`走行Bに列「${xcol}」に対応する列が無いため重ねられません`, "error");
         continue;
       }
+      const nameMap = new Map();  // 実列名 -> 表示名 (Aで選んだ列名)
+      const rSignals = [];
+      for (const s of signals) {
+        const resolved = resolveColumn(s, rColSet, aliasList);
+        if (resolved) { rSignals.push(resolved); nameMap.set(resolved, s); }
+      }
+      if (!rSignals.length) {
+        if (r.primary) throw new Error("比較する信号に対応する列がありません");
+        toast("走行Bに対応する信号が無いため重ねられません", "error");
+        continue;
+      }
+      const rFilters = filters
+        .map((f) => {
+          const resolved = resolveColumn(f.column, rColSet, aliasList);
+          return resolved ? { ...f, column: resolved } : null;
+        })
+        .filter(Boolean);
       try {
-        const res = await fetchRun(r.id, r.schema, xcol, signals, filters, maxPoints);
-        results.push({ ...r, res });
+        const res = await fetchRun(r.id, r.schema, rXcol, rSignals, rFilters, maxPoints);
+        const data = {};
+        for (const [key, values] of Object.entries(res.data)) {
+          data[nameMap.get(key) || key] = values;
+        }
+        data[xcol] = res.data[rXcol];
+        results.push({ ...r, res: { ...res, data } });
       } catch (e) {
         if (r.primary) throw e;
         toast(`走行Bを重ねられません: ${e.message}`, "error");

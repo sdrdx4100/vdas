@@ -49,6 +49,13 @@ def test_analysis_workspace_and_modules_are_served() -> None:
             "mp-align-offset",
             "mp-align-value",
             "mp-align-reset",
+            # 信号名エイリアス (会社ごとに列名が違う信号の対応付け)
+            "mp-alias-manage",
+            "tc-alias-manage",
+            "alias-backdrop",
+            "aliasmodal-list",
+            "aliasmodal-group",
+            "aliasmodal-column",
         ):
             assert f'id="{element_id}"' in html
         for context in ("timeseries", "stats", "cluster"):
@@ -64,6 +71,7 @@ def test_analysis_workspace_and_modules_are_served() -> None:
 
         for module in (
             "api.js",
+            "aliases.js",
             "analysis.js",
             "charts.js",
             "datasets.js",
@@ -71,6 +79,7 @@ def test_analysis_workspace_and_modules_are_served() -> None:
             "main.js",
             "map.js",
             "state.js",
+            "tscompare.js",
             "workspace.js",
             "views.js",
         ):
@@ -95,5 +104,12 @@ def test_analysis_workspace_and_modules_are_served() -> None:
         # GPSログ自体に信号列も含まれる自己完結型ログを「信号データ」候補に含める
         assert "function signalCandidates" in map_js
         assert "別ファイルとのペアは不要です" in map_js
+
+        # 会社によって列名が違う信号 (例: speed / 車速) をエイリアスで対応づけて比較できること
+        assert "resolveColumn" in map_js
+        assert "loadAliases" in map_js
+        tscompare_js = client.get("/static/js/tscompare.js").text
+        assert "resolveColumn" in tscompare_js
+        assert "loadAliases" in tscompare_js
 
         assert client.get("/static/js/compare.js").status_code == 404

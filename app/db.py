@@ -48,6 +48,12 @@ CREATE TABLE IF NOT EXISTS label_sets (
     columns TEXT NOT NULL,           -- JSON: 列名の配列
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS signal_aliases (
+    id TEXT PRIMARY KEY,
+    canonical_name TEXT NOT NULL,    -- グループ名 (例: "車速")
+    column_name TEXT NOT NULL,       -- 実列名 (例: "speed" / "車速")
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 

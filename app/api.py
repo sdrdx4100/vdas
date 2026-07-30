@@ -588,3 +588,40 @@ def create_labelset(req: LabelSetCreate):
 def delete_labelset(labelset_id: str):
     db.meta_execute("DELETE FROM label_sets WHERE id = ?", (labelset_id,))
     return {"ok": True}
+
+
+# ---------- 信号名エイリアス (会社ごとに異なる列名の対応付け) ----------
+
+class SignalAliasCreate(BaseModel):
+    canonical_name: str
+    column_name: str
+
+
+@router.get("/signal-aliases")
+def list_signal_aliases():
+    return db.meta_query("SELECT * FROM signal_aliases ORDER BY canonical_name, column_name")
+
+
+@router.post("/signal-aliases")
+def create_signal_alias(req: SignalAliasCreate):
+    canonical_name = req.canonical_name.strip()
+    column_name = req.column_name.strip()
+    if not canonical_name or not column_name:
+        raise HTTPException(status_code=400, detail="グループ名・列名はどちらも必須です")
+    existing = db.meta_query(
+        "SELECT id FROM signal_aliases WHERE canonical_name = ? AND column_name = ?",
+        (canonical_name, column_name))
+    if existing:
+        return {"id": existing[0]["id"]}
+    alias_id = uuid.uuid4().hex[:12]
+    db.meta_execute(
+        "INSERT INTO signal_aliases (id, canonical_name, column_name) VALUES (?, ?, ?)",
+        (alias_id, canonical_name, column_name),
+    )
+    return {"id": alias_id}
+
+
+@router.delete("/signal-aliases/{alias_id}")
+def delete_signal_alias(alias_id: str):
+    db.meta_execute("DELETE FROM signal_aliases WHERE id = ?", (alias_id,))
+    return {"ok": True}

@@ -388,6 +388,49 @@ def test_map_track_manual_gps_and_columns(ingest_csv) -> None:
     assert res["lon"] == [139.0, 139.01, 139.02, 139.03, 139.04]
 
 
+# GPSログ自体に信号列(speed, rpm)も全部入っている自己完結型ログ
+SELF_CSV = """latitude,longitude,speed,rpm
+35.00,139.00,10,1000
+35.01,139.01,20,1500
+35.02,139.02,30,2000
+35.03,139.03,40,2500
+35.04,139.04,50,3000
+"""
+
+
+def test_self_contained_gps_log_used_without_pair(ingest_csv) -> None:
+    # GPSログ自体に信号列がすべて入っているケース: 別ファイルとのペアが
+    # 無くても、自分自身をGPS源として使い、そのまま地図+波形が見れる
+    # (行数・記録開始時刻のズレの心配も一切ない)。
+    ds = ingest_csv(SELF_CSV, filename="allinone.csv")
+    pair = gps.find_gps_pair(ds["id"])
+    assert pair is not None
+    assert pair["match"] == "self"
+    assert pair["dataset"]["id"] == ds["id"]
+
+    res = gps.map_track(ds["id"], signals=["speed", "rpm"])
+    assert res["align_mode"] == "self"
+    assert res["lat"] == [35.0, 35.01, 35.02, 35.03, 35.04]
+    assert res["signals"]["speed"] == [10, 20, 30, 40, 50]
+    assert res["gps_dataset"]["id"] == ds["id"]
+    assert res["signal_dataset"]["id"] == ds["id"]
+
+
+def test_gps_pairs_includes_self_contained_log(ingest_csv) -> None:
+    ds = ingest_csv(SELF_CSV, filename="allinone2.csv")
+    pairs = gps.gps_pairs()
+    entry = next(p for p in pairs if p["signal"]["id"] == ds["id"])
+    assert entry["gps"]["id"] == ds["id"]
+    assert entry["match"] == "self"
+
+
+def test_pure_gps_log_excluded_from_signal_candidates(ingest_csv) -> None:
+    # 座標列しかない (信号列を兼ねない) GPS専用ログは、従来どおり信号側候補にしない
+    ingest_csv(GPS_CSV, filename="pureonly.csv")
+    pairs = gps.gps_pairs()
+    assert not any(p["signal"]["original_filename"] == "pureonly.csv" for p in pairs)
+
+
 def test_gps_endpoints_through_api() -> None:
     with TestClient(app) as client:
         sig = client.post("/api/datasets/upload",

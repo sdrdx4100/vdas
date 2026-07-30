@@ -92,4 +92,8 @@ def test_analysis_workspace_and_modules_are_served() -> None:
         assert "mapCompatible" in map_js
         assert "座標形式が異なるため重ねて表示できません" not in map_js
 
+        # GPSログ自体に信号列も含まれる自己完結型ログを「信号データ」候補に含める
+        assert "function signalCandidates" in map_js
+        assert "別ファイルとのペアは不要です" in map_js
+
         assert client.get("/static/js/compare.js").status_code == 404

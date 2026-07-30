@@ -38,9 +38,7 @@ async function refreshMapSelects() {
     gpsDatasets = [];
     pairs = [];
   }
-  const gpsIds = new Set(gpsDatasets.map((g) => g.dataset.id));
-  // 信号候補は GPS 以外のデータセット (GPS ログ自体は信号側に出さない)
-  const signals = state.datasets.filter((d) => !gpsIds.has(d.id));
+  const signals = signalCandidates();
   fillSelect($("#mp-dataset"), signals, "— 信号データを選択 —");
   fillSelect($("#mp-dataset-b"), signals, "— 比較しない —");
   const gpsOptions = gpsDatasets.map((g) => g.dataset);
@@ -48,6 +46,16 @@ async function refreshMapSelects() {
     gpsOptions.map((d) => `<option value="${d.id}">${esc(d.name)} (${fmtNum(d.row_count)}行)</option>`).join("");
   $("#mp-gps").innerHTML = gpsHtml;
   $("#mp-gps-b").innerHTML = gpsHtml;
+}
+
+// 「信号データ」として選べる候補: GPS専用ログ(座標列しかない)は除くが、
+// GPSログ自体に信号列も揃っている自己完結型ログ (pairsでmatch="self") は含める。
+function signalCandidates(excludeId) {
+  const gpsIds = new Set(gpsDatasets.map((g) => g.dataset.id));
+  const selfContainedIds = new Set(
+    pairs.filter((p) => p.match === "self").map((p) => p.signal.id));
+  return state.datasets.filter((d) =>
+    d.id !== excludeId && (!gpsIds.has(d.id) || selfContainedIds.has(d.id)));
 }
 
 function fillSelect(sel, datasets, placeholder) {
@@ -60,8 +68,7 @@ function fillSelect(sel, datasets, placeholder) {
 export function onMapPageEnter() {
   const sel = $("#mp-dataset");
   if (!sel.value) {
-    const gpsIds = new Set(gpsDatasets.map((g) => g.dataset.id));
-    const first = state.datasets.find((d) => !gpsIds.has(d.id));
+    const first = signalCandidates()[0];
     if (first) sel.value = first.id;
   }
   if (sel.value && state.mp.schema?.dataset?.id !== sel.value) {
@@ -86,7 +93,14 @@ $("#mp-dataset").addEventListener("change", async () => {
 
   // GPS ペアを自動選択して案内する
   const pair = pairs.find((p) => p.signal.id === dsId);
-  if (pair) {
+  if (pair && pair.match === "self") {
+    $("#mp-gps").value = pair.gps.id;
+    await loadGpsSchema(pair.lat_col, pair.lon_col);
+    const cols = pair.lat_col && pair.lon_col
+      ? ` (${esc(pair.lat_col)} / ${esc(pair.lon_col)})`
+      : ` (座標列: ${(pair.coord_cols || []).map(esc).join(", ")} — 値から自動判定)`;
+    setPairStatus(`✅ このデータ自体に GPS 座標が含まれています${cols} — 別ファイルとのペアは不要です`, "ok");
+  } else if (pair) {
     $("#mp-gps").value = pair.gps.id;
     await loadGpsSchema(pair.lat_col, pair.lon_col);
     const cols = pair.lat_col && pair.lon_col
@@ -130,8 +144,7 @@ async function updateComparisonRecommendation(signalId) {
   // 前の走行Aに対する候補や案内を即座に消し、取得失敗時も古い推薦を残さない
   hint.hidden = true;
   hint.textContent = "";
-  const gpsIds = new Set(gpsDatasets.map((g) => g.dataset.id));
-  const candidates = state.datasets.filter((d) => d.id !== signalId && !gpsIds.has(d.id));
+  const candidates = signalCandidates(signalId);
   fillSelect(sel, candidates, "— 比較しない —");
   let data;
   try {
@@ -408,10 +421,15 @@ export async function plotMap(auto = false) {
       : `<span class="chip">地図 (緯度 ${esc(res.lat_col)} / 経度 ${esc(res.lon_col)})</span>`;
     const alignChip = res.align_mode === "time"
       ? '<span class="chip" title="GPSと信号の記録開始時刻・サンプリング周期のズレを補正して対応づけました">🕒 時刻ベースで整列</span> '
+      : res.align_mode === "self"
+      ? '<span class="chip" title="GPS座標と信号がすべて同じファイルに含まれています">📍 単一ファイル (GPS+波形)</span> '
       : "";
     const mismatchChip = view.mapMismatch
       ? '<span class="chip" style="color:var(--warn, #b8860b);">⚠ 走行Bは座標形式が異なるため地図には表示していません (波形は比較表示)</span> '
       : "";
+    // 自己完結型 (GPS=信号) の場合は「GPS: xxx」チップが走行Aと同名で重複するので省く
+    const gpsChip = res.align_mode === "self"
+      ? "" : `<span class="chip">GPS: ${esc(res.gps_dataset.name)}</span> `;
     $("#mp-meta").innerHTML =
       `<span class="chip accent">走行 A: ${esc(res.signal_dataset.name)} / ${fmtNum(res.returned_rows)} 点</span> ` +
       (resB ? `<span class="chip">走行 B: ${esc(resB.signal_dataset.name)} / ${fmtNum(resB.returned_rows)} 点</span> ` : "") +
@@ -419,7 +437,7 @@ export async function plotMap(auto = false) {
         ? `<span class="chip">GPS補間 A:${fmtNum(view.runs[0].course.estimatedCount)}点` +
           (resB ? ` / B:${fmtNum(view.runs[1].course.estimatedCount)}点` : "") + "</span> "
         : "") +
-      `<span class="chip">GPS: ${esc(res.gps_dataset.name)}</span> ${modeChip} ${alignChip}${mismatchChip}`;
+      `${gpsChip}${modeChip} ${alignChip}${mismatchChip}`;
     renderChart("mp-map", () => renderMap(view));
     renderChart("mp-wave", () => renderWave(view));
     // 連動・再生の初期化で万一エラーが出ても、描画済みのグラフは消さない

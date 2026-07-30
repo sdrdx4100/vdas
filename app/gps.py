@@ -170,6 +170,19 @@ def is_gps_dataset(dataset_id: str) -> bool:
     return kind != "none"
 
 
+def _has_extra_signals(dataset_id: str) -> bool:
+    """座標列以外にも波形として使える数値列を持つか。
+
+    GPS ログ側に速度・回転数などの信号列がすべて含まれているケース
+    (別ファイルとのペア突き合わせが不要な自己完結型ログ) を判定する。
+    """
+    kind, coord_cols = _dataset_coords(dataset_id)
+    if kind == "none":
+        return False
+    numeric = {c["name"] for c in dataset_schema(dataset_id)["columns"] if c["kind"] == "numeric"}
+    return bool(numeric - set(coord_cols))
+
+
 def list_gps_datasets() -> list[dict[str, Any]]:
     """座標列 (緯度経度 または GPS_x/y/z) を持つデータセット (= GPS ログ) を一覧する。"""
     out = []
@@ -236,6 +249,16 @@ def find_gps_pair(dataset_id: str,
         return ts_hits[0][2]
     if len(tag_hits) == 1:  # X ↔ X_GPS が1件ずつのときだけタグで確定
         return tag_hits[0]
+    # ④ 他に候補が無くても、この信号データ自体に座標列と信号列が両方
+    # 揃っている (GPS ログ側が波形データを兼ねている) なら、自分自身を
+    # GPS 源として使う。別ファイルとの行対応づけが一切不要になるため、
+    # 行数・記録開始時刻のズレの心配もない。
+    if _has_extra_signals(dataset_id):
+        kind, cols = _dataset_coords(dataset_id)
+        lat = cols[0] if kind == "latlon" else None
+        lon = cols[1] if kind == "latlon" else None
+        return {"dataset": target, "coord_kind": kind, "coord_cols": cols,
+                "lat_col": lat, "lon_col": lon, "match": "self"}
     return None
 
 
@@ -246,8 +269,10 @@ def gps_pairs(gps_list: list[dict[str, Any]] | None = None) -> list[dict[str, An
     gps_ids = {e["dataset"]["id"] for e in gps_list}
     pairs = []
     for ds in list_datasets():
-        if ds["id"] in gps_ids:
-            continue  # GPS そのものは信号側候補にしない
+        # 座標列しかない「GPS専用」ログは信号側候補にしない。ただし信号列も
+        # 兼ねている (自己完結型) ログは、自分自身とのペアとして候補に残す。
+        if ds["id"] in gps_ids and not _has_extra_signals(ds["id"]):
+            continue
         pair = find_gps_pair(ds["id"], gps_list=gps_list)
         if pair:
             pairs.append({
@@ -580,14 +605,17 @@ def map_track(dataset_id: str, signals: list[str] | None = None,
     # が分かる場合は、実際の時刻が最も近い行同士を対応づける方式に切り替える。
     # これにより、記録開始が数秒ずれていたり行数が完全一致しない場合でも
     # 正しく対応づけられる (行位置だけを信じると静かにズレてしまうため)。
-    align_mode = "rowid"
+    # 信号データ自体がGPS源を兼ねている (自己完結型) 場合は、同じテーブル同士の
+    # rowid結合になり常に1:1で正しく揃うため、時刻ベース整列の判定は不要。
+    align_mode = "self" if gps_id == dataset_id else "rowid"
     with db.duck() as con:
-        sig_time_expr = _time_seconds_expr(dataset_id)
-        gps_time_expr = _time_seconds_expr(gps_id)
         row_map = None
-        if sig_time_expr and gps_time_expr:
-            row_map = _time_based_row_map(
-                con, sig_table, sig_time_expr, where, params, gps_table, gps_time_expr)
+        if align_mode != "self":
+            sig_time_expr = _time_seconds_expr(dataset_id)
+            gps_time_expr = _time_seconds_expr(gps_id)
+            if sig_time_expr and gps_time_expr:
+                row_map = _time_based_row_map(
+                    con, sig_table, sig_time_expr, where, params, gps_table, gps_time_expr)
         try:
             if row_map:
                 align_mode = "time"

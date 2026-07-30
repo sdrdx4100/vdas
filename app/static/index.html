@@ -469,6 +469,12 @@
         <label class="field">最大表示点数
           <input type="number" id="mp-maxpoints" value="5000" min="100" max="50000" step="100" style="width:110px;">
         </label>
+        <label class="field">地図スタイル
+          <select id="mp-mapstyle" style="min-width:150px;">
+            <option value="open-street-map">実地図 (要ネット)</option>
+            <option value="white-bg">白地図 (オフライン)</option>
+          </select>
+        </label>
         <button class="btn" id="mp-plot" title="手動で再描画">🔄 更新</button>
         <button class="btn" id="mp-save-view">ビューを保存</button>
       </div>

@@ -26,6 +26,64 @@ const playback = {
 };
 const PLAYBACK_POINTS_PER_SECOND = 30;
 
+// ---------- 地図スタイル (実地図タイル / オフライン白地図) ----------
+// 実地図(open-street-map)はネット経由でタイルを取得する。取得できない環境では
+// MapLibre が "Style is not done loading." を投げ地図が出ないため、白地図へ切替可能。
+let mapStyle = localStorage.getItem("vdas-mapstyle") || "open-street-map";
+let mapFellBack = false;  // 実地図タイル取得失敗で白地図に自動切替済みか
+
+const mapStyleSel = $("#mp-mapstyle");
+if (mapStyleSel) {
+  mapStyleSel.value = mapStyle;
+  mapStyleSel.addEventListener("change", () => {
+    mapStyle = mapStyleSel.value;
+    localStorage.setItem("vdas-mapstyle", mapStyle);
+    mapFellBack = false;  // 明示切替で自動フォールバック状態をリセット
+    plotMap(true);
+  });
+}
+
+function maplibreInstance() {
+  try {
+    const fl = $("#mp-map")._fullLayout;
+    const key = fl && Object.keys(fl).find((k) => /^map\d*$/.test(k));
+    return (key && fl[key]._subplot && fl[key]._subplot.map) || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// 実地図タイルを取得できない (オフライン/制限ネットワーク) 場合、白地図へ自動切替。
+// タイル取得失敗は例外/エラーイベント/スタイル未ロードのいずれでも起き得るため、
+// エラーイベントに加えて一定時間スタイルが読めなければフォールバックする。
+function fallbackToBlankMap() {
+  if (mapFellBack || mapStyle === "white-bg") return;
+  mapFellBack = true;
+  mapStyle = "white-bg";
+  localStorage.setItem("vdas-mapstyle", mapStyle);  // 次回以降は実地図を試さない
+  if (mapStyleSel) mapStyleSel.value = "white-bg";
+  toast("地図タイルを取得できないため白地図(オフライン)に切り替えました。実地図に戻すには「地図スタイル」で選び直してください", "error");
+  plotMap(true);
+}
+
+function attachMapErrorFallback() {
+  if (mapStyle === "white-bg") return;
+  const mm = maplibreInstance();
+  if (!mm) return;
+  if (!mm.__vdasHooked) {
+    mm.__vdasHooked = true;
+    mm.on("error", fallbackToBlankMap);
+  }
+  // スタイルが数秒内にロードされなければオフライン扱いで白地図へ切り替える
+  setTimeout(() => {
+    try {
+      if (!mm.isStyleLoaded()) fallbackToBlankMap();
+    } catch (_) {
+      fallbackToBlankMap();
+    }
+  }, 4000);
+}
+
 // ---------- データセット選択肢の同期 ----------
 
 document.addEventListener("datasets-refreshed", () => {
@@ -816,10 +874,12 @@ function renderGeographic(view) {
     });
   }
   Plotly.react("mp-map", traces, {
-    map: { style: "open-street-map", center: view.primary.center, zoom: view.primary.zoom },
+    map: { style: mapStyle, center: view.primary.center, zoom: view.primary.zoom },
     margin: { l: 0, r: 0, t: 0, b: 0 }, showlegend: comparison,
     paper_bgcolor: cssVar("--chart-surface"), font: { color: cssVar("--text-primary") },
-  }, PLOT_CONFIG);
+    // 実地図のスタイル/タイル取得に失敗すると react は reject するため、
+    // 成功・失敗どちらでもフォールバック監視を仕掛ける
+  }, PLOT_CONFIG).then(attachMapErrorFallback, attachMapErrorFallback);
 }
 
 // ローカル座標 (メートル等) → 等尺の平面軌跡として描く

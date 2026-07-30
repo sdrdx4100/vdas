@@ -500,6 +500,11 @@ def get_gps_datasets():
     return _wrap(gps.list_gps_datasets)
 
 
+@router.get("/gps/{signal_id}/similar")
+def get_similar_runs(signal_id: str):
+    return _wrap(gps.similar_runs, signal_id)
+
+
 class MapTrackRequest(BaseModel):
     signals: list[str] = []
     color_signal: str | None = None

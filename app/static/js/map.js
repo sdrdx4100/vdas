@@ -119,8 +119,66 @@ $("#mp-dataset").addEventListener("change", async () => {
       colorSel.value = picks[0] || "";
     }
   }
+  updateComparisonRecommendation(dsId);
   plotMap(true);
 });
+
+// 走行B候補を GPS ルートの近さで並べ替え・目印付けし、おすすめを提示する
+async function updateComparisonRecommendation(signalId) {
+  const sel = $("#mp-dataset-b");
+  const hint = $("#mp-cmp-hint");
+  // 前の走行Aに対する候補や案内を即座に消し、取得失敗時も古い推薦を残さない
+  hint.hidden = true;
+  hint.textContent = "";
+  const gpsIds = new Set(gpsDatasets.map((g) => g.dataset.id));
+  const candidates = state.datasets.filter((d) => d.id !== signalId && !gpsIds.has(d.id));
+  fillSelect(sel, candidates, "— 比較しない —");
+  let data;
+  try {
+    data = await api(`/api/gps/${signalId}/similar`);
+  } catch (_) {
+    return;
+  }
+  if ($("#mp-dataset").value !== signalId) return;  // 選択が変わっていたら破棄
+  const prev = sel.value;
+  const runs = data.runs || [];
+  const proximity = (r) => {
+    const dist = r.distance == null ? "" :
+      ` ${fmtNum(r.distance)}${r.distance_unit === "km" ? "km" : ""}`;
+    if (r.overlaps) return `GPS範囲重複${dist}`;
+    if (r.nearby) return `GPS近似${dist}`;
+    if (r.same_tag) return "同じタグ";
+    return "";
+  };
+  const opt = (r) => {
+    const star = r.recommended ? "⭐ " : "";
+    const reason = proximity(r);
+    const tag = reason ? ` (${reason})` : "";
+    return `<option value="${r.signal.id}">${star}${esc(r.signal.name)} (${fmtNum(r.signal.row_count)}行)${tag}</option>`;
+  };
+  // GPSを自動ペアできない走行も、従来どおり手動比較できる選択肢として末尾に残す
+  const rankedIds = new Set(runs.map((r) => r.signal.id));
+  const others = candidates.filter((d) => !rankedIds.has(d.id))
+    .map((d) => `<option value="${d.id}">${esc(d.name)} (${fmtNum(d.row_count)}行)</option>`)
+    .join("");
+  sel.innerHTML = '<option value="">— 比較しない —</option>' + runs.map(opt).join("") + others;
+  if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
+
+  const best = runs.find((r) => r.recommended);
+  if (best && !sel.value) {
+    const reason = proximity(best);
+    hint.hidden = false;
+    hint.innerHTML = `おすすめ比較: <button class="chip clickable on" id="mp-cmp-apply">⭐ ${esc(best.signal.name)}${reason ? ` (${esc(reason)})` : ""}</button>`;
+    $("#mp-cmp-apply").addEventListener("click", () => {
+      sel.value = best.signal.id;
+      sel.dispatchEvent(new Event("change"));
+      hint.hidden = true;
+    });
+  } else {
+    hint.hidden = true;
+    hint.innerHTML = "";
+  }
+}
 
 function setPairStatus(html, kind) {
   const el = $("#mp-pair-status");

@@ -6,7 +6,7 @@ from datetime import datetime
 import pytest
 from fastapi.testclient import TestClient
 
-from app import gps, queries
+from app import gps, ingest, queries
 from app.main import app
 
 SIG_CSV = """time,speed,rpm
@@ -125,6 +125,53 @@ def test_tag_disambiguates_timestamp_matches(ingest_csv) -> None:
     assert pair["dataset"]["id"] != honda["id"]
 
 
+GPS_TOKYO = "latitude,longitude\n35.60,139.60\n35.61,139.61\n35.62,139.62\n"
+GPS_TOKYO2 = "latitude,longitude\n35.605,139.605\n35.615,139.615\n"  # 東京圏で重なる
+GPS_TOKYO_PARALLEL = "latitude,longitude\n35.63,139.63\n35.64,139.64\n"  # 非重複だが近い
+GPS_OSAKA = "latitude,longitude\n34.60,135.50\n34.61,135.51\n"       # 遠い
+
+
+def test_similar_runs_ranks_by_proximity(ingest_csv) -> None:
+    ref = ingest_csv(SIG_CSV, filename="ref.csv")
+    ingest_csv(GPS_TOKYO, filename="ref.csv")
+    near = ingest_csv(SIG_CSV, filename="near.csv")
+    ingest_csv(GPS_TOKYO2, filename="near.csv")
+    far = ingest_csv(SIG_CSV, filename="far.csv")
+    ingest_csv(GPS_OSAKA, filename="far.csv")
+    res = gps.similar_runs(ref["id"])
+    assert res["has_reference"]
+    ids = [r["signal"]["id"] for r in res["runs"]]
+    assert ids[0] == near["id"]  # bbox が重なる方が先頭
+    assert set(ids) == {near["id"], far["id"]}  # 自分自身は除外
+    assert res["runs"][0]["overlaps"] and res["runs"][0]["recommended"]
+    far_run = next(r for r in res["runs"] if r["signal"]["id"] == far["id"])
+    assert far_run["overlaps"] is False
+    assert res["runs"][0]["distance_unit"] == "km"
+    assert res["runs"][0]["distance"] < far_run["distance"]
+
+
+def test_similar_runs_recognizes_near_non_overlapping_route(ingest_csv) -> None:
+    ref = ingest_csv(SIG_CSV, filename="ref.csv")
+    ingest_csv(GPS_TOKYO, filename="ref.csv")
+    near = ingest_csv(SIG_CSV, filename="parallel.csv")
+    ingest_csv(GPS_TOKYO_PARALLEL, filename="parallel.csv")
+    res = gps.similar_runs(ref["id"])
+    run = next(r for r in res["runs"] if r["signal"]["id"] == near["id"])
+    assert not run["overlaps"]
+    assert run["nearby"] and run["recommended"]
+    assert run["relative_distance"] <= 1.5
+
+
+def test_similar_runs_same_tag_recommended(ingest_csv) -> None:
+    ref = ingest_csv(SIG_CSV, filename="r.csv", tags=["トヨタ"])
+    ingest_csv(GPS_TOKYO, filename="r.csv", tags=["トヨタ_GPS"])
+    cand = ingest_csv(SIG_CSV, filename="c.csv", tags=["トヨタ"])
+    ingest_csv(GPS_OSAKA, filename="c.csv", tags=["トヨタ_GPS"])  # 遠いが同じ会社タグ
+    res = gps.similar_runs(ref["id"])
+    run = next(r for r in res["runs"] if r["signal"]["id"] == cand["id"])
+    assert run["same_tag"] and run["recommended"]
+
+
 def test_find_gps_pair_with_suffix(ingest_csv) -> None:
     sig = ingest_csv(SIG_CSV, filename="drive002.csv")
     ingest_csv(GPS_CSV, filename="drive002_gps.csv")  # 接尾辞つき
@@ -156,6 +203,36 @@ def test_map_track_aligns_by_rowindex(ingest_csv) -> None:
     assert res["color_values"] == [10, 20, 30, 40, 50]
     # 中心は軌跡の平均あたり
     assert 35.0 <= res["center"]["lat"] <= 35.04
+
+
+def test_stitched_signal_and_gps_logs_pair_and_plot(ingest_csv) -> None:
+    """3分割された信号/GPSを同じ順で結合すれば、1走行として自動ペアできる。"""
+    signal_parts = [
+        ingest_csv(f"time,speed\n{i * 2},{10 + i * 20}\n{i * 2 + 1},{20 + i * 20}\n",
+                   filename=f"split_signal_{i}.csv")
+        for i in range(3)
+    ]
+    gps_parts = [
+        ingest_csv(
+            "latitude,longitude\n"
+            f"{35 + i * 0.02:.2f},{139 + i * 0.02:.2f}\n"
+            f"{35.01 + i * 0.02:.2f},{139.01 + i * 0.02:.2f}\n",
+            filename=f"split_gps_{i}.csv",
+        )
+        for i in range(3)
+    ]
+    stitched_signal = ingest.concat_datasets(
+        [part["id"] for part in signal_parts], name="分割走行_結合済み")
+    stitched_gps = ingest.concat_datasets(
+        [part["id"] for part in gps_parts], name="分割走行_結合済み")
+
+    pair = gps.find_gps_pair(stitched_signal["id"])
+    assert pair is not None
+    assert pair["dataset"]["id"] == stitched_gps["id"]
+    result = gps.map_track(stitched_signal["id"], signals=["speed"])
+    assert result["total_rows"] == 6
+    assert result["signals"]["speed"] == [10, 20, 30, 40, 50, 60]
+    assert result["lat"] == [35.0, 35.01, 35.02, 35.03, 35.04, 35.05]
 
 
 def test_map_track_downsamples(ingest_csv) -> None:
@@ -288,6 +365,10 @@ def test_gps_endpoints_through_api() -> None:
         gps_list = client.get("/api/gps/datasets")
         assert gps_list.status_code == 200
         assert len(gps_list.json()) == 1
+
+        similar = client.get(f"/api/gps/{sig['id']}/similar")
+        assert similar.status_code == 200
+        assert similar.json()["has_reference"]
 
         track = client.post(f"/api/gps/{sig['id']}/track",
                             json={"signals": ["speed"], "color_signal": "speed"})

@@ -42,6 +42,7 @@ def test_analysis_workspace_and_modules_are_served() -> None:
             "mp-seek-hint",
             "mp-dataset-b",
             "mp-gps-b",
+            "mp-cmp-hint",
             "mp-sync-mode",
             "mp-sync-hint",
             "mp-alignment",
@@ -79,5 +80,10 @@ def test_analysis_workspace_and_modules_are_served() -> None:
                 "application/javascript",
                 "text/javascript",
             }
+
+        # MapLibre のスタイル読込前エラーが波形描画を巻き込まないための保護
+        map_js = client.get("/static/js/map.js").text
+        assert "function safeMapRestyle" in map_js
+        assert "wireLinkedCursor(view)" in map_js
 
         assert client.get("/static/js/compare.js").status_code == 404

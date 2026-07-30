@@ -244,6 +244,128 @@ def gps_pairs() -> list[dict[str, Any]]:
     return pairs
 
 
+def _horizontal_cols(gps_id: str) -> tuple[str, str, bool] | None:
+    """GPS データセットの水平面2列と、緯度経度と確定できるかを返す。"""
+    cols = dataset_schema(gps_id)["columns"]
+    lat, lon = detect_latlon(cols)
+    if lat and lon:
+        return lon, lat, True
+    axes = detect_coord_axes(cols)
+    if "x" in axes and "y" in axes:
+        return axes["x"], axes["y"], False
+    _, cc = coord_columns(cols)
+    return (cc[0], cc[1], False) if len(cc) >= 2 else None
+
+
+def _route_extent(gps_id: str) -> dict[str, Any] | None:
+    """GPS ルートの重心と外接矩形 (bbox) を1クエリで求める (全点は読まない)。"""
+    hz = _horizontal_cols(gps_id)
+    if not hz:
+        return None
+    xcol, ycol, known_geographic = hz
+    table, colmap = _schema_map(gps_id)
+    if xcol not in colmap or ycol not in colmap:
+        return None
+    qx, qy = _quote(xcol), _quote(ycol)
+    with db.duck() as con:
+        row = con.execute(
+            f"SELECT min({qx}), max({qx}), avg({qx}), min({qy}), max({qy}), avg({qy}) "
+            f"FROM {_quote(table)}").fetchone()
+    if row is None or row[0] is None or row[3] is None:
+        return None
+    xmin, xmax, xavg, ymin, ymax, yavg = (float(v) for v in row)
+    geographic = known_geographic or _looks_like_degrees([ymin, ymax], [xmin, xmax])
+    return {
+        "cx": xavg, "cy": yavg,
+        "xmin": xmin, "xmax": xmax, "ymin": ymin, "ymax": ymax,
+        "mode": "geographic" if geographic else "planar",
+    }
+
+
+def _bbox_overlap(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    return not (a["xmax"] < b["xmin"] or a["xmin"] > b["xmax"]
+                or a["ymax"] < b["ymin"] or a["ymin"] > b["ymax"])
+
+
+def _haversine_km(x1: float, y1: float, x2: float, y2: float) -> float:
+    """経度・緯度2点間の大円距離を km で返す。"""
+    lat1, lat2 = math.radians(y1), math.radians(y2)
+    dlat = lat2 - lat1
+    dlon = math.radians(x2 - x1)
+    h = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    return 6371.0088 * 2 * math.asin(min(1.0, math.sqrt(h)))
+
+
+def _extent_distance(a: dict[str, Any], b: dict[str, Any]) -> tuple[float, str, float] | None:
+    """ルート重心間の距離・単位・ルート寸法で正規化した距離を返す。"""
+    if a["mode"] != b["mode"]:
+        return None
+
+    def planar_distance(x1: float, y1: float, x2: float, y2: float) -> float:
+        return math.hypot(x2 - x1, y2 - y1)
+
+    if a["mode"] == "geographic":
+        measure = _haversine_km
+        unit = "km"
+    else:
+        measure = planar_distance
+        unit = "座標単位"
+    distance = measure(a["cx"], a["cy"], b["cx"], b["cy"])
+    size_a = measure(a["xmin"], a["ymin"], a["xmax"], a["ymax"])
+    size_b = measure(b["xmin"], b["ymin"], b["xmax"], b["ymax"])
+    scale = max(size_a, size_b, 1e-9)
+    return distance, unit, distance / scale
+
+
+def similar_runs(signal_id: str, limit: int = 10) -> dict[str, Any]:
+    """指定した走行 (信号データ) の GPS ルートに近い順で、比較候補の走行を返す。
+
+    bbox の重なりに加え、ルート寸法で正規化した重心距離も使う。これにより、
+    完全には重ならない平行コースや、長い走行の一部分だけを記録した候補も拾う。
+    緯度経度とローカル座標は混ぜず、同じ会社タグは補助根拠として扱う。
+    """
+    get_dataset(signal_id)  # 存在チェック
+    ref_pair = find_gps_pair(signal_id)
+    ref = _route_extent(ref_pair["dataset"]["id"]) if ref_pair else None
+    ref_tags = _norm_tags(get_dataset(signal_id).get("tags"))
+
+    runs = []
+    for pair in gps_pairs():
+        sig = pair["signal"]
+        if sig["id"] == signal_id:
+            continue
+        ext = _route_extent(pair["gps"]["id"])
+        same_tag = bool(ref_tags & _norm_tags(sig.get("tags")))
+        distance = distance_unit = relative_distance = None
+        overlaps = nearby = False
+        if ref is not None and ext is not None:
+            measured = _extent_distance(ref, ext)
+            if measured:
+                raw_distance, distance_unit, relative_distance = measured
+                distance = round(raw_distance, 3 if distance_unit == "km" else 2)
+                relative_distance = round(relative_distance, 3)
+                overlaps = _bbox_overlap(ref, ext)
+                nearby = overlaps or relative_distance <= 1.5
+        runs.append({
+            "signal": sig, "gps": pair["gps"], "match": pair.get("match"),
+            "distance": distance, "distance_unit": distance_unit,
+            "relative_distance": relative_distance,
+            "overlaps": overlaps, "nearby": nearby, "same_tag": same_tag,
+            "coord_mode": ext["mode"] if ext else None,
+            "recommended": nearby or same_tag,
+        })
+
+    # GPS範囲重複 → 近接 → その他。同区分では重心距離、同タグの順。
+    runs.sort(key=lambda r: (
+        0 if r["overlaps"] else 1,
+        0 if r["nearby"] else 1,
+        r["distance"] if r["distance"] is not None else float("inf"),
+        0 if r["same_tag"] else 1,
+    ))
+    return {"reference_gps": ref_pair["dataset"]["name"] if ref_pair else None,
+            "has_reference": ref is not None, "runs": runs[:limit]}
+
+
 def _zoom_for_span(span: float) -> float:
     """緯度経度の広がり (度) から地図のズームレベルを概算する。"""
     if span <= 0:

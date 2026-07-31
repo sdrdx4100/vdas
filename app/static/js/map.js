@@ -1,5 +1,5 @@
 /* GPS・地図タブ: 上部に走行軌跡の地図、下部に信号波形。行位置で連動する */
-import { $, $$, api, toast, debounce, fmtNum, esc } from "./api.js";
+import { $, $$, api, toast, debounce, fmtNum, esc, dsOptionLabel } from "./api.js";
 import { state } from "./state.js";
 import { loadSchema, columnOptions, renderFilters, activeFilters } from "./filters.js";
 import { seriesColors, baseLayout, PLOT_CONFIG, renderChart, chartRegistry, cssVar } from "./charts.js";
@@ -105,7 +105,7 @@ async function refreshMapSelects() {
   fillSelect($("#mp-dataset-b"), signals, "— 比較しない —");
   const gpsOptions = gpsDatasets.map((g) => g.dataset);
   const gpsHtml = '<option value="">自動 (同名から判定)</option>' +
-    gpsOptions.map((d) => `<option value="${d.id}">${esc(d.name)} (${fmtNum(d.row_count)}行)</option>`).join("");
+    gpsOptions.map((d) => `<option value="${d.id}">${dsOptionLabel(d)}</option>`).join("");
   $("#mp-gps").innerHTML = gpsHtml;
   $("#mp-gps-b").innerHTML = gpsHtml;
 }
@@ -123,7 +123,7 @@ function signalCandidates(excludeId) {
 function fillSelect(sel, datasets, placeholder) {
   const prev = sel.value;
   sel.innerHTML = `<option value="">${placeholder}</option>` +
-    datasets.map((d) => `<option value="${d.id}">${esc(d.name)} (${fmtNum(d.row_count)}行)</option>`).join("");
+    datasets.map((d) => `<option value="${d.id}">${dsOptionLabel(d)}</option>`).join("");
   if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
 }
 
@@ -229,12 +229,12 @@ async function updateComparisonRecommendation(signalId) {
     const star = r.recommended ? "⭐ " : "";
     const reason = proximity(r);
     const tag = reason ? ` (${reason})` : "";
-    return `<option value="${r.signal.id}">${star}${esc(r.signal.name)} (${fmtNum(r.signal.row_count)}行)${tag}</option>`;
+    return `<option value="${r.signal.id}">${star}${dsOptionLabel(r.signal)}${tag}</option>`;
   };
   // GPSを自動ペアできない走行も、従来どおり手動比較できる選択肢として末尾に残す
   const rankedIds = new Set(runs.map((r) => r.signal.id));
   const others = candidates.filter((d) => !rankedIds.has(d.id))
-    .map((d) => `<option value="${d.id}">${esc(d.name)} (${fmtNum(d.row_count)}行)</option>`)
+    .map((d) => `<option value="${d.id}">${dsOptionLabel(d)}</option>`)
     .join("");
   sel.innerHTML = '<option value="">— 比較しない —</option>' + runs.map(opt).join("") + others;
   if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;

@@ -50,3 +50,12 @@ export function esc(s) {
   d.textContent = s == null ? "" : String(s);
   return d.innerHTML;
 }
+
+// データセット選択肢の表示ラベル (エスケープ済み)。タグを併記して
+// 「どの Parquet がどれか」を名前だけより見分けやすくする。
+// 例: 走行A ［A社・高速］ (5,000行)
+export function dsOptionLabel(d) {
+  const tags = (d.tags || []).filter(Boolean);
+  const tagStr = tags.length ? ` ［${tags.join("・")}］` : "";
+  return `${esc(d.name)}${esc(tagStr)} (${fmtNum(d.row_count)}行)`;
+}

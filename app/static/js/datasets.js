@@ -1,5 +1,5 @@
 /* データ管理タブ: 一覧・タグ付け・一括操作・アップロード・プレビュー */
-import { $, $$, api, toast, fmtNum, fmtSize, esc } from "./api.js";
+import { $, $$, api, toast, fmtNum, fmtSize, esc, dsOptionLabel } from "./api.js";
 import { state } from "./state.js";
 import { chipEditor, openTagEditor, updateTagDatalist, openConcatDialog } from "./modals.js";
 import { gotoPage } from "./nav.js";
@@ -235,7 +235,7 @@ async function editTags(ds) {
 function fillDatasetSelect(sel) {
   const prev = sel.value;
   sel.innerHTML = '<option value="">— 選択 —</option>' +
-    state.datasets.map((d) => `<option value="${d.id}">${esc(d.name)} (${fmtNum(d.row_count)}行)</option>`).join("");
+    state.datasets.map((d) => `<option value="${d.id}">${dsOptionLabel(d)}</option>`).join("");
   if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
 }
 

@@ -1,6 +1,6 @@
 /* 時系列比較タブ: 2走行の信号を、時刻が違っても同じ条件(整列軸)に揃えて重ねる。
    横軸(整列軸)を「基準信号」または「時間+手動オフセット」から選べる。 */
-import { $, $$, api, toast, debounce, fmtNum, esc } from "./api.js";
+import { $, $$, api, toast, debounce, fmtNum, esc, dsOptionLabel } from "./api.js";
 import { state } from "./state.js";
 import { loadSchema, columnOptions, renderFilters, activeFilters } from "./filters.js";
 import { seriesColors, baseLayout, PLOT_CONFIG, renderChart, chartRegistry, cssVar } from "./charts.js";
@@ -24,7 +24,7 @@ document.addEventListener("datasets-refreshed", () => {
 function fillSel(sel, placeholder) {
   const prev = sel.value;
   sel.innerHTML = `<option value="">${placeholder}</option>` +
-    state.datasets.map((d) => `<option value="${d.id}">${esc(d.name)} (${fmtNum(d.row_count)}行)</option>`).join("");
+    state.datasets.map((d) => `<option value="${d.id}">${dsOptionLabel(d)}</option>`).join("");
   if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
 }
 

@@ -77,6 +77,7 @@ def test_analysis_workspace_and_modules_are_served() -> None:
             "charts.js",
             "datasets.js",
             "explore.js",
+            "leaflet-loader.js",
             "main.js",
             "map.js",
             "plotly-loader.js",
@@ -97,18 +98,31 @@ def test_analysis_workspace_and_modules_are_served() -> None:
         loader_js = client.get("/static/js/plotly-loader.js").text
         assert 'import "./map.js"' not in main_js
         assert 'await import("./map.js")' in nav_js
+        assert '"compare", "map", "tscompare"' not in nav_js
         assert "for (let attempt = 0; attempt < 2" in loader_js
 
-        # MapLibre のスタイル読込前エラーが波形描画を巻き込まないための保護
+        # 地図はローカル同梱 Leaflet、波形だけ Plotly を使う
         map_js = client.get("/static/js/map.js").text
-        assert "function safeMapRestyle" in map_js
+        leaflet_loader_js = client.get("/static/js/leaflet-loader.js").text
         assert "wireLinkedCursor(view)" in map_js
         assert 'await renderChart("mp-map"' in map_js
-        assert "Promise.resolve(Plotly.restyle" in map_js
+        assert "createTrackCanvasLayer" in map_js
+        assert "L.CRS.Simple" in map_js
+        assert "scattermap" not in map_js
+        assert "Plotly.restyle" not in map_js
+        assert "ensureLeaflet" in map_js
+        assert "波形ライブラリの読み込みに失敗しました。地図と走行再生は利用できます" in map_js
+        assert '"/static/vendor/leaflet/leaflet.js"' in leaflet_loader_js
+        assert "for (let attempt = 0; attempt < 2" in leaflet_loader_js
         assert '"vdas-mapstyle-choice"' in map_js
         assert 'localStorage.getItem("vdas-mapstyle")' not in map_js
-        assert "interceptExpectedMapFailure" in map_js
-        assert '"vdas-unhandled-error"' in map_js
+
+        for asset in (
+            "/static/vendor/leaflet/leaflet.js",
+            "/static/vendor/leaflet/leaflet.css",
+            "/static/vendor/leaflet/LICENSE",
+        ):
+            assert client.get(asset).status_code == 200
 
         # 走行Bの取得失敗や座標形式の不一致で画面全体が消えないこと
         # (Aだけでも表示を続け、波形比較は座標形式に関係なく維持する)
@@ -140,3 +154,14 @@ def test_plotly_bundle_is_compressed_cached_and_compatible() -> None:
         assert response.headers["content-encoding"] == "gzip"
         assert "max-age=" in response.headers["cache-control"]
         assert b"scattermap" in response.content
+
+
+def test_leaflet_bundle_is_local_and_compressed() -> None:
+    with TestClient(app) as client:
+        response = client.get(
+            "/static/vendor/leaflet/leaflet.js",
+            headers={"Accept-Encoding": "gzip"},
+        )
+        assert response.status_code == 200
+        assert response.headers["content-encoding"] == "gzip"
+        assert b"Leaflet 1.9.4" in response.content

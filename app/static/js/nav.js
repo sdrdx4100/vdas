@@ -7,7 +7,7 @@ import { onTscomparePageEnter } from "./tscompare.js";
 import { ensurePlotly } from "./plotly-loader.js";
 
 const PLOTLY_PAGES = new Set([
-  "timeseries", "stats", "explore", "compare", "map", "tscompare", "cluster",
+  "timeseries", "stats", "explore", "compare", "tscompare", "cluster",
 ]);
 let navigationId = 0;
 

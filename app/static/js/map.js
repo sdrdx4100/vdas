@@ -5,6 +5,8 @@ import { loadSchema, columnOptions, renderFilters, activeFilters } from "./filte
 import { seriesColors, baseLayout, PLOT_CONFIG, renderChart, chartRegistry, cssVar } from "./charts.js";
 import { openNameDialog } from "./modals.js";
 import { loadAliases, openAliasManager, resolveColumn } from "./aliases.js";
+import { ensureLeaflet } from "./leaflet-loader.js";
+import { ensurePlotly } from "./plotly-loader.js";
 
 $("#mp-alias-manage").addEventListener("click", () => openAliasManager());
 loadAliases();
@@ -27,16 +29,14 @@ const playback = {
 };
 const PLAYBACK_POINTS_PER_SECOND = 30;
 
-// ---------- 地図スタイル (実地図タイル / オフライン白地図) ----------
-// 実地図(open-street-map)はネット経由でタイルを取得する。取得できない環境では
-// MapLibre が "Style is not done loading." を投げ地図が出ないため、白地図へ切替可能。
-// 旧キーには自動フォールバックの white-bg まで保存していたため、明示選択用の
-// 新しいキーへ分離する。これで一度の通信失敗が以後ずっと白地図を固定しない。
+// ---------- Leaflet 地図 (実地図タイル / オフライン白地図) ----------
 const MAP_STYLE_CHOICE_KEY = "vdas-mapstyle-choice";
 let mapStyle = localStorage.getItem(MAP_STYLE_CHOICE_KEY) || "open-street-map";
-let mapFellBack = false;  // 実地図タイル取得失敗で白地図に自動切替済みか
-let mapFallbackTimer = null;
-let expectedMapErrorsUntil = 0;
+let leafletMap = null;
+let leafletMode = null;
+let leafletTileLayer = null;
+let leafletTrackLayer = null;
+let tileErrorCount = 0;
 
 const mapStyleSel = $("#mp-mapstyle");
 if (mapStyleSel) {
@@ -44,82 +44,19 @@ if (mapStyleSel) {
   mapStyleSel.addEventListener("change", () => {
     mapStyle = mapStyleSel.value;
     localStorage.setItem(MAP_STYLE_CHOICE_KEY, mapStyle);
-    mapFellBack = false;  // 明示切替で自動フォールバック状態をリセット
-    plotMap(true);
+    if (playback.res) renderMap(playback.res);
+    else plotMap(true);
   });
 }
 
-// MapLibre はタイル要求が即座に失敗すると、内部インスタンスへ error リスナーを
-// 付けられるより先に既定の "Map error." を window へ投げる。この既知の背景地図
-// エラーだけを捕捉し、通常の描画エラーは隠さず白地図へ回復させる。
-function interceptExpectedMapFailure(event) {
-  if (mapStyle === "white-bg" && Date.now() > expectedMapErrorsUntil) return;
-  const message = event.reason?.message || event.error?.message || event.message || "";
-  if (!/^(Map error\.?|Style is not done loading\.?)$/i.test(message)) return;
-  event.preventDefault();
-  event.stopImmediatePropagation();
-  fallbackToBlankMap();
-}
-window.addEventListener("error", interceptExpectedMapFailure, true);
-window.addEventListener("unhandledrejection", interceptExpectedMapFailure, true);
-window.addEventListener("vdas-unhandled-error", (event) => {
-  if (mapStyle === "white-bg" && Date.now() > expectedMapErrorsUntil) return;
-  const message = event.detail?.message || String(event.detail || "");
-  if (!/^(Map error\.?|Style is not done loading\.?)$/i.test(message)) return;
-  event.preventDefault();
-  fallbackToBlankMap();
-});
-
-function maplibreInstance() {
-  try {
-    const fl = $("#mp-map")._fullLayout;
-    const key = fl && Object.keys(fl).find((k) => /^map\d*$/.test(k));
-    return (key && fl[key]._subplot && fl[key]._subplot.map) || null;
-  } catch (_) {
-    return null;
-  }
-}
-
-// 実地図タイルを取得できない (オフライン/制限ネットワーク) 場合、白地図へ自動切替。
-// タイル取得失敗は例外/エラーイベント/スタイル未ロードのいずれでも起き得るため、
-// エラーイベントに加えて一定時間スタイルが読めなければフォールバックする。
 function fallbackToBlankMap() {
-  if (mapFellBack || mapStyle === "white-bg") return;
-  mapFellBack = true;
-  mapStyle = "white-bg";
-  expectedMapErrorsUntil = Date.now() + 10000;
-  if (mapStyleSel) mapStyleSel.value = "white-bg";
-  toast("地図タイルを取得できないため白地図(オフライン)に切り替えました。実地図に戻すには「地図スタイル」で選び直してください", "error");
-  // MapLibre の error イベント処理中に同じ描画領域へ Plotly.react すると、
-  // 古いスタイルの破棄と新しい初期化が衝突する。イベントを抜けてから描画し直す。
-  clearTimeout(mapFallbackTimer);
-  mapFallbackTimer = setTimeout(() => {
-    mapFallbackTimer = null;
-    plotMap(true);
-  }, 100);
-}
-
-function attachMapErrorFallback(attempt = 0) {
   if (mapStyle === "white-bg") return;
-  const mm = maplibreInstance();
-  if (!mm) {
-    // Plotly.react の Promise 完了前にタイル取得が始まるため、MapLibre の
-    // インスタンスが生えるまで短時間だけ待ち、error リスナーを先に付ける。
-    if (attempt < 40) setTimeout(() => attachMapErrorFallback(attempt + 1), 50);
-    return;
-  }
-  if (!mm.__vdasHooked) {
-    mm.__vdasHooked = true;
-    mm.on("error", fallbackToBlankMap);
-  }
-  // スタイルが数秒内にロードされなければオフライン扱いで白地図へ切り替える
-  setTimeout(() => {
-    try {
-      if (!mm.isStyleLoaded()) fallbackToBlankMap();
-    } catch (_) {
-      fallbackToBlankMap();
-    }
-  }, 4000);
+  mapStyle = "white-bg";
+  if (mapStyleSel) mapStyleSel.value = "white-bg";
+  if (leafletTileLayer && leafletMap) leafletMap.removeLayer(leafletTileLayer);
+  leafletTileLayer = null;
+  $("#mp-map").classList.add("leaflet-offline");
+  toast("地図タイルを取得できないため白地図(オフライン)に切り替えました。実地図に戻すには「地図スタイル」で選び直してください", "error");
 }
 
 // ---------- データセット選択肢の同期 ----------
@@ -168,6 +105,7 @@ function fillSelect(sel, datasets, placeholder) {
 }
 
 export async function onMapPageEnter() {
+  await ensureLeaflet();
   // map.js はGPSタブを開くまで遅延ロードされるため、初回は datasets-refreshed を
   // 受け取っていない。ここで一度だけGPS候補とペアを取得する。
   if (!mapSelectsReady) await refreshMapSelects();
@@ -569,15 +507,26 @@ export async function plotMap(auto = false) {
           (resB ? ` / B:${fmtNum(view.runs[1].course.estimatedCount)}点` : "") + "</span> "
         : "") +
       `${gpsChip}${modeChip} ${alignChip}${mismatchChip}`;
-    // scattermap の初期化は非同期。完了前に連動カーソルの restyle を呼ぶと
-    // "Style is not done loading" で地図が壊れるため、地図→波形の順に待つ。
+    // 地図は Leaflet、波形は Plotly と描画系を分離する。片方の初期化状態が
+    // もう片方を壊さないよう、地図の準備後に波形を描画する。
     await renderChart("mp-map", () => renderMap(view));
     if (requestId !== mpRequestId) return;
-    await renderChart("mp-wave", () => renderWave(view));
-    if (requestId !== mpRequestId) return;
-    // 連動・再生の初期化で万一エラーが出ても、描画済みのグラフは消さない
+    let waveReady = false;
     try {
-      wireLinkedCursor(view);
+      await ensurePlotly();
+      if (requestId !== mpRequestId) return;
+      await renderChart("mp-wave", () => renderWave(view));
+      waveReady = true;
+    } catch (waveError) {
+      chartRegistry.delete("mp-wave");
+      $("#mp-wave").innerHTML =
+        `<div class="empty-note" style="padding:24px;">波形ライブラリの読み込みに失敗しました。地図と走行再生は利用できます。<br>${esc(waveError.message)}</div>`;
+      toast("波形の読み込みに失敗しましたが、地図は表示を続けます", "error");
+    }
+    if (requestId !== mpRequestId) return;
+    // 連動・再生の初期化で万一エラーが出ても、描画済みの地図は消さない
+    try {
+      if (waveReady) wireLinkedCursor(view);
       resetPlayback(view);
     } catch (linkErr) {
       console.warn("連動/再生の初期化に失敗しました:", linkErr);
@@ -586,8 +535,8 @@ export async function plotMap(auto = false) {
     if (requestId === mpRequestId) {
       clearPlayback();
       toast(`エラー: ${e.message}`, "error");
-      Plotly.purge("mp-map");
-      Plotly.purge("mp-wave");
+      clearLeafletMap();
+      window.Plotly?.purge?.("mp-wave");
       chartRegistry.delete("mp-map");
       chartRegistry.delete("mp-wave");
     }
@@ -859,8 +808,14 @@ function nearestCoursePoint(reference, target, targetIndex, start, end, geograph
 }
 
 function renderMap(view) {
-  if (view.mode === "planar") return renderPlanar(view);
-  return renderGeographic(view);
+  return ensureLeaflet().then(() => {
+    const map = ensureLeafletMap(view.mode);
+    configureTileLayer(view.mode);
+    if (leafletTrackLayer) map.removeLayer(leafletTrackLayer);
+    leafletTrackLayer = createTrackCanvasLayer(view).addTo(map);
+    fitLeafletBounds(view);
+    map.invalidateSize(false);
+  });
 }
 
 // 軌跡の色分け指定を決める (単独走行のみ)。信号 or 高度(GPS_z) → {値, ラベル}
@@ -872,147 +827,351 @@ function mapColorSpec(res, comparison) {
   return null;
 }
 
-// 緯度経度 → 実地図タイル上に軌跡を描く
-function renderGeographic(view) {
-  // 座標形式が違って地図に出せない走行は比較のうちに数えない
-  // (A単独になるなら、通常どおり信号・高度での色分けを許す)
-  const comparison = view.runs.filter((run) => run.mapCompatible).length > 1;
-  const traces = [];
-  for (const [runIndex, run] of view.runs.entries()) {
-    if (!run.mapCompatible) continue;  // 座標形式が違う走行は地図に重ねない (波形では比較する)
-    const res = run.res;
-    const cspec = mapColorSpec(res, comparison);
-    const hasColor = !!cspec;
-    const actualLat = res.lat.map((value, i) => run.course.estimated[i] ? null : value);
-    const actualLon = res.lon.map((value, i) => run.course.estimated[i] ? null : value);
-    traces.push({
-      type: "scattermap", mode: hasColor ? "markers" : "lines+markers",
-      lat: actualLat, lon: actualLon, name: run.label,
-      line: { width: 3, color: run.color },
-      marker: hasColor
-        ? { size: 7, color: cspec.values, colorscale: "Viridis", showscale: true,
-            colorbar: { title: { text: cspec.label, side: "right" }, thickness: 12 } }
-        : { size: comparison ? 5 : 4, color: run.color },
-      customdata: res.index.map((_, pointIndex) => ({ runIndex, pointIndex })),
-      hovertemplate: `<b>${run.label}</b><br>緯度 %{lat:.5f}<br>経度 %{lon:.5f}` +
-        (hasColor ? `<br>${esc(cspec.label)} %{marker.color}` : "") + "<extra></extra>",
-    });
-    if (run.course.estimatedCount) {
-      const estimated = estimatedTrackCoords(run.course.filledX, run.course.filledY,
-        run.course.estimated);
-      traces.push({
-        type: "scattermap", mode: "lines+markers",
-        lat: estimated.y, lon: estimated.x, name: `${run.label} GPS補間`,
-        line: { width: 4, color: run.color },
-        marker: { size: 5, color: run.color },
-        opacity: 0.45,
-        customdata: estimated.indices.map((pointIndex) =>
-          pointIndex == null ? null : ({ runIndex, pointIndex })),
-        hovertemplate: `<b>${run.label}（GPS補間）</b><br>推定位置<extra></extra>`,
-        showlegend: comparison,
-      });
-    }
-    traces.push({
-      type: "scattermap", mode: "markers",
-      lat: [run.course.filledY[0]], lon: [run.course.filledX[0]],
-      marker: { size: 16, color: run.color, line: { width: 2, color: "#fff" } },
-      hoverinfo: "skip", showlegend: false, visible: false,
-      meta: { highlightFor: runIndex },
-    });
-  }
-  const requestedMapStyle = mapStyle;
-  const rendering = Plotly.react("mp-map", traces, {
-    map: { style: requestedMapStyle, center: view.primary.center, zoom: view.primary.zoom },
-    margin: { l: 0, r: 0, t: 0, b: 0 }, showlegend: comparison,
-    paper_bgcolor: cssVar("--chart-surface"), font: { color: cssVar("--text-primary") },
-    // 実地図のスタイル/タイル取得に失敗すると react は reject するため、
-    // 成功・失敗どちらでもフォールバック監視を仕掛ける
-  }, PLOT_CONFIG);
-  attachMapErrorFallback();
-  return rendering.then(() => {
-    if (requestedMapStyle === "white-bg" && mapFellBack) {
-      // 古い実地図インスタンスから遅れて届くエラーまで吸収してから通常状態へ戻す。
-      setTimeout(() => { mapFellBack = false; }, 500);
-    }
-  }).catch((error) => {
-    // 実地図タイル起因の Map error は白地図への切替で回復させる。
-    // white-bg 自体の失敗やそれ以外の描画エラーは呼び出し元へ返す。
-    if (requestedMapStyle !== "white-bg" && /map|style/i.test(error?.message || "")) {
-      fallbackToBlankMap();
-      return;
-    }
-    throw error;
+function ensureLeafletMap(mode) {
+  if (leafletMap && leafletMode === mode) return leafletMap;
+  destroyLeafletMap();
+  const mapEl = $("#mp-map");
+  if (mapEl._fullLayout && window.Plotly) Plotly.purge(mapEl);
+  mapEl.innerHTML = "";
+  leafletMode = mode;
+  leafletMap = L.map(mapEl, {
+    crs: mode === "planar" ? L.CRS.Simple : L.CRS.EPSG3857,
+    attributionControl: mode !== "planar",
+    zoomControl: true,
+    minZoom: mode === "planar" ? -8 : 2,
+    preferCanvas: true,
   });
+  L.control.scale({ imperial: false, maxWidth: 140 }).addTo(leafletMap);
+  return leafletMap;
 }
 
-// ローカル座標 (メートル等) → 等尺の平面軌跡として描く
-function renderPlanar(view) {
-  // 座標形式が違って地図に出せない走行は比較のうちに数えない
-  // (A単独になるなら、通常どおり信号・高度での色分けを許す)
-  const comparison = view.runs.filter((run) => run.mapCompatible).length > 1;
-  const traces = [];
-  for (const [runIndex, run] of view.runs.entries()) {
-    if (!run.mapCompatible) continue;  // 座標形式が違う走行は地図に重ねない (波形では比較する)
-    const res = run.res;
-    const cspec = mapColorSpec(res, comparison);
-    const hasColor = !!cspec;
-    const actualX = res.px.map((value, i) => run.course.estimated[i] ? null : value);
-    const actualY = res.py.map((value, i) => run.course.estimated[i] ? null : value);
-    traces.push({
-      type: "scattergl", mode: hasColor ? "markers" : "lines+markers",
-      x: actualX, y: actualY, name: run.label,
-      line: { width: 2, color: run.color },
-      marker: hasColor
-        ? { size: 6, color: cspec.values, colorscale: "Viridis", showscale: true,
-            colorbar: { title: { text: cspec.label, side: "right" }, thickness: 12 } }
-        : { size: comparison ? 5 : 4, color: run.color },
-      customdata: res.index.map((_, pointIndex) => ({ runIndex, pointIndex })),
-      hovertemplate: `<b>${run.label}</b><br>${esc(res.px_col)} %{x}<br>${esc(res.py_col)} %{y}` +
-        (hasColor ? `<br>${esc(cspec.label)} %{marker.color}` : "") + "<extra></extra>",
-    });
-    if (run.course.estimatedCount) {
-      const estimated = estimatedTrackCoords(run.course.filledX, run.course.filledY,
-        run.course.estimated);
-      traces.push({
-        type: "scattergl", mode: "lines+markers",
-        x: estimated.x, y: estimated.y, name: `${run.label} GPS補間`,
-        line: { width: 3, color: run.color, dash: "dot" },
-        marker: { size: 5, color: run.color },
-        opacity: 0.5,
-        customdata: estimated.indices.map((pointIndex) =>
-          pointIndex == null ? null : ({ runIndex, pointIndex })),
-        hovertemplate: `<b>${run.label}（GPS補間）</b><br>推定位置<extra></extra>`,
-        showlegend: comparison,
-      });
-    }
-    traces.push({
-      type: "scattergl", mode: "markers",
-      x: [run.course.filledX[0]], y: [run.course.filledY[0]],
-      marker: { size: 15, color: run.color, line: { width: 2, color: "#fff" } },
-      hoverinfo: "skip", showlegend: false, visible: false,
-      meta: { highlightFor: runIndex },
-    });
-  }
-  const layout = baseLayout({
-    height: 420, showlegend: comparison, margin: { l: 56, r: 20, t: 10, b: 44 },
-    xaxis: Object.assign(baseLayout().xaxis, { title: { text: view.primary.px_col } }),
-    // 縦横を等尺にして軌跡の形が歪まないようにする
-    yaxis: Object.assign(baseLayout().yaxis, { title: { text: view.primary.py_col }, scaleanchor: "x", scaleratio: 1 }),
+function configureTileLayer(mode) {
+  const mapEl = $("#mp-map");
+  if (leafletTileLayer && leafletMap) leafletMap.removeLayer(leafletTileLayer);
+  leafletTileLayer = null;
+  tileErrorCount = 0;
+  mapEl.classList.toggle("leaflet-planar", mode === "planar");
+  mapEl.classList.toggle("leaflet-offline", mode === "planar" || mapStyle === "white-bg");
+  if (mapStyleSel) mapStyleSel.disabled = mode === "planar";
+  if (mode === "planar" || mapStyle === "white-bg") return;
+  const layer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: "&copy; OpenStreetMap contributors",
   });
-  return Plotly.react("mp-map", traces, layout, PLOT_CONFIG);
+  layer.on("tileerror", () => {
+    if (leafletTileLayer !== layer) return;
+    tileErrorCount += 1;
+    if (tileErrorCount >= 3) fallbackToBlankMap();
+  });
+  layer.on("load", () => { tileErrorCount = 0; });
+  leafletTileLayer = layer.addTo(leafletMap);
 }
 
-function estimatedTrackCoords(x, y, estimated) {
-  const outX = [];
-  const outY = [];
-  const indices = [];
-  for (let i = 0; i < x.length; i += 1) {
-    const belongs = estimated[i] || estimated[i - 1] || estimated[i + 1];
-    outX.push(belongs ? x[i] : null);
-    outY.push(belongs ? y[i] : null);
-    indices.push(belongs ? i : null);
+function destroyLeafletMap() {
+  if (leafletMap) leafletMap.remove();
+  leafletMap = null;
+  leafletMode = null;
+  leafletTileLayer = null;
+  leafletTrackLayer = null;
+}
+
+function clearLeafletMap() {
+  if (leafletMap && leafletTrackLayer) leafletMap.removeLayer(leafletTrackLayer);
+  leafletTrackLayer = null;
+}
+
+function fitLeafletBounds(view) {
+  const bounds = L.latLngBounds([]);
+  let pointCount = 0;
+  let onlyPoint = null;
+  for (const run of view.runs) {
+    if (!run.mapCompatible) continue;
+    for (let i = 0; i < run.course.filledX.length; i += 1) {
+      const x = Number(run.course.filledX[i]);
+      const y = Number(run.course.filledY[i]);
+      if (Number.isFinite(x) && Number.isFinite(y)) {
+        onlyPoint = [y, x];
+        bounds.extend(onlyPoint);
+        pointCount += 1;
+      }
+    }
   }
-  return { x: outX, y: outY, indices };
+  if (!pointCount) return;
+  if (pointCount === 1) {
+    leafletMap.setView(onlyPoint, view.mode === "planar" ? 0 : 16);
+  } else {
+    leafletMap.fitBounds(bounds, { padding: [28, 28], maxZoom: 17 });
+  }
+}
+
+const VIRIDIS = ["#440154", "#3b528b", "#21918c", "#5ec962", "#fde725"];
+
+function viridisColor(value, min, max) {
+  if (!Number.isFinite(Number(value))) return "#999999";
+  const ratio = max > min ? Math.max(0, Math.min(1, (Number(value) - min) / (max - min))) : 0.5;
+  const scaled = ratio * (VIRIDIS.length - 1);
+  const index = Math.min(VIRIDIS.length - 2, Math.floor(scaled));
+  const mix = scaled - index;
+  const a = VIRIDIS[index].match(/\w\w/g).map((part) => parseInt(part, 16));
+  const b = VIRIDIS[index + 1].match(/\w\w/g).map((part) => parseInt(part, 16));
+  const rgb = a.map((channel, i) => Math.round(channel + (b[i] - channel) * mix));
+  return `rgb(${rgb.join(",")})`;
+}
+
+// Leaflet の地図操作だけを借り、軌跡は一枚の Canvas にまとめて描く。
+// 点ごとの Leaflet レイヤーを作らないため、最大5万点でも初期化負荷が増えにくい。
+function createTrackCanvasLayer(view) {
+  const TrackCanvasLayer = L.Layer.extend({
+    initialize(trackView) {
+      this._view = trackView;
+      this._highlightLayers = new Map();
+      this._hoverFrame = null;
+      this._drawFrame = null;
+      this._lastHover = null;
+    },
+
+    onAdd(map) {
+      this._map = map;
+      this._canvas = L.DomUtil.create("canvas", "vdas-track-canvas leaflet-zoom-animated");
+      map.getPanes().overlayPane.appendChild(this._canvas);
+      map.on("moveend zoomend resize", this._scheduleDraw, this);
+      map.on("mousemove", this._onMouseMove, this);
+      map.on("click", this._onClick, this);
+      this._leave = () => this._clearHover(true);
+      map.getContainer().addEventListener("mouseleave", this._leave);
+      this._scheduleDraw();
+    },
+
+    onRemove(map) {
+      map.off("moveend zoomend resize", this._scheduleDraw, this);
+      map.off("mousemove", this._onMouseMove, this);
+      map.off("click", this._onClick, this);
+      map.getContainer().removeEventListener("mouseleave", this._leave);
+      cancelAnimationFrame(this._drawFrame);
+      cancelAnimationFrame(this._hoverFrame);
+      for (const marker of this._highlightLayers.values()) map.removeLayer(marker);
+      this._highlightLayers.clear();
+      this._canvas?.remove();
+      this._clearHover(false);
+    },
+
+    setHighlight(runIndex, pointIndex) {
+      const run = this._view.runs[runIndex];
+      if (!run?.mapCompatible || pointIndex == null) return;
+      const latlng = [run.course.filledY[pointIndex], run.course.filledX[pointIndex]];
+      let marker = this._highlightLayers.get(runIndex);
+      if (!marker) {
+        marker = L.circleMarker(latlng, {
+          radius: 7,
+          color: "#fff",
+          weight: 3,
+          opacity: 1,
+          fillColor: HIGHLIGHT_COLOR,
+          fillOpacity: 1,
+          interactive: false,
+        }).addTo(this._map);
+        this._highlightLayers.set(runIndex, marker);
+      } else {
+        marker.setLatLng(latlng).setStyle({ opacity: 1, fillOpacity: 1 });
+      }
+    },
+
+    hideHighlight(runIndex) {
+      this._highlightLayers.get(runIndex)?.setStyle({ opacity: 0, fillOpacity: 0 });
+    },
+
+    _scheduleDraw() {
+      cancelAnimationFrame(this._drawFrame);
+      this._drawFrame = requestAnimationFrame(() => this._draw());
+    },
+
+    _draw() {
+      if (!this._map || !this._canvas) return;
+      const size = this._map.getSize();
+      const ratio = window.devicePixelRatio || 1;
+      const topLeft = this._map.containerPointToLayerPoint([0, 0]);
+      L.DomUtil.setPosition(this._canvas, topLeft);
+      this._canvas.style.width = `${size.x}px`;
+      this._canvas.style.height = `${size.y}px`;
+      this._canvas.width = Math.max(1, Math.round(size.x * ratio));
+      this._canvas.height = Math.max(1, Math.round(size.y * ratio));
+      const ctx = this._canvas.getContext("2d");
+      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      ctx.clearRect(0, 0, size.x, size.y);
+      const comparison = this._view.runs.filter((run) => run.mapCompatible).length > 1;
+      this._screenPoints = new Map();
+      for (const [runIndex, run] of this._view.runs.entries()) {
+        if (!run.mapCompatible) continue;
+        const screenPoints = run.course.filledX.map((x, i) =>
+          this._map.latLngToContainerPoint([run.course.filledY[i], x]));
+        this._screenPoints.set(runIndex, screenPoints);
+        this._drawRun(ctx, run, runIndex, comparison, screenPoints);
+      }
+      this._drawLegend(ctx, size, comparison);
+    },
+
+    _drawRun(ctx, run, runIndex, comparison, screenPoints) {
+      const estimated = run.course.estimated;
+      const count = run.course.filledX.length;
+      const cspec = mapColorSpec(run.res, comparison);
+      const drawSegments = (estimatedSegment) => {
+        ctx.beginPath();
+        let active = false;
+        for (let i = 1; i < count; i += 1) {
+          const belongs = !!(estimated[i - 1] || estimated[i]);
+          if (belongs !== estimatedSegment) {
+            active = false;
+            continue;
+          }
+          const from = screenPoints[i - 1];
+          const to = screenPoints[i];
+          if (!Number.isFinite(from.x + from.y + to.x + to.y)) {
+            active = false;
+            continue;
+          }
+          if (!active) ctx.moveTo(from.x, from.y);
+          ctx.lineTo(to.x, to.y);
+          active = true;
+        }
+        ctx.strokeStyle = run.color;
+        ctx.lineWidth = estimatedSegment ? 4 : 3;
+        ctx.globalAlpha = estimatedSegment ? 0.45 : 1;
+        ctx.setLineDash(estimatedSegment ? [7, 6] : []);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+        ctx.setLineDash([]);
+      };
+      drawSegments(false);
+      if (run.course.estimatedCount) drawSegments(true);
+
+      const stride = Math.max(1, Math.ceil(count / 12000));
+      let min = Infinity;
+      let max = -Infinity;
+      for (const value of cspec?.values || []) {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) continue;
+        min = Math.min(min, numeric);
+        max = Math.max(max, numeric);
+      }
+      if (!Number.isFinite(min)) [min, max] = [0, 1];
+      for (let i = 0; i < count; i += stride) {
+        if (estimated[i]) continue;
+        const point = screenPoints[i];
+        if (!Number.isFinite(point.x + point.y)) continue;
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, cspec ? 3.2 : 2, 0, Math.PI * 2);
+        ctx.fillStyle = cspec ? viridisColor(cspec.values[i], min, max) : run.color;
+        ctx.fill();
+      }
+      run._leafletColorSpec = cspec ? { ...cspec, min, max } : null;
+      run._leafletRunIndex = runIndex;
+    },
+
+    _drawLegend(ctx, size, comparison) {
+      ctx.save();
+      ctx.font = '12px "Segoe UI", sans-serif';
+      ctx.textBaseline = "middle";
+      if (comparison) {
+        const width = 104;
+        const height = 24 * this._view.runs.filter((run) => run.mapCompatible).length + 8;
+        ctx.fillStyle = "rgba(255,255,255,.9)";
+        ctx.fillRect(size.x - width - 10, 10, width, height);
+        let y = 30;
+        for (const run of this._view.runs) {
+          if (!run.mapCompatible) continue;
+          ctx.fillStyle = run.color;
+          ctx.fillRect(size.x - width, y - 5, 18, 4);
+          ctx.fillStyle = "#202020";
+          ctx.fillText(run.label, size.x - width + 26, y - 3);
+          y += 24;
+        }
+      }
+      const spec = this._view.runs.find((run) => run._leafletColorSpec)?._leafletColorSpec;
+      if (spec) {
+        const x = size.x - 190;
+        const y = size.y - 38;
+        ctx.fillStyle = "rgba(255,255,255,.9)";
+        ctx.fillRect(x - 8, y - 22, 188, 52);
+        const gradient = ctx.createLinearGradient(x, 0, x + 160, 0);
+        VIRIDIS.forEach((color, i) => gradient.addColorStop(i / (VIRIDIS.length - 1), color));
+        ctx.fillStyle = gradient;
+        ctx.fillRect(x, y, 160, 10);
+        ctx.fillStyle = "#202020";
+        ctx.fillText(spec.label, x, y - 10);
+        ctx.font = '10px "Segoe UI", sans-serif';
+        ctx.fillText(fmtNum(spec.min), x, y + 22);
+        const maxText = fmtNum(spec.max);
+        ctx.fillText(maxText, x + 160 - ctx.measureText(maxText).width, y + 22);
+      }
+      ctx.restore();
+    },
+
+    _nearest(latlng, limit = 12) {
+      const cursor = this._map.latLngToContainerPoint(latlng);
+      let nearest = null;
+      let best = limit * limit;
+      for (const [runIndex, run] of this._view.runs.entries()) {
+        if (!run.mapCompatible) continue;
+        const screenPoints = this._screenPoints?.get(runIndex) || [];
+        for (let i = 0; i < screenPoints.length; i += 1) {
+          const point = screenPoints[i];
+          const distance = (point.x - cursor.x) ** 2 + (point.y - cursor.y) ** 2;
+          if (distance <= best) {
+            best = distance;
+            nearest = { runIndex, pointIndex: i };
+          }
+        }
+      }
+      return nearest;
+    },
+
+    _onMouseMove(event) {
+      this._pendingLatLng = event.latlng;
+      if (this._hoverFrame) return;
+      this._hoverFrame = requestAnimationFrame(() => {
+        this._hoverFrame = null;
+        const point = this._nearest(this._pendingLatLng);
+        if (!point) return this._clearHover(true);
+        this._lastHover = point;
+        this._map.getContainer().style.cursor = "pointer";
+        showLinkedForPoint(this._view, point);
+        this._showTooltip(point, this._pendingLatLng);
+      });
+    },
+
+    _onClick(event) {
+      const point = this._nearest(event.latlng, 14);
+      if (!point) return;
+      stopPlayback();
+      seekRunIndependently(point.runIndex, point.pointIndex);
+    },
+
+    _showTooltip(point, latlng) {
+      const run = this._view.runs[point.runIndex];
+      const res = run.res;
+      const i = point.pointIndex;
+      const coord = this._view.mode === "planar"
+        ? `${res.px_col}: ${fmtNum(run.course.filledX[i])} / ${res.py_col}: ${fmtNum(run.course.filledY[i])}`
+        : `緯度 ${Number(run.course.filledY[i]).toFixed(5)} / 経度 ${Number(run.course.filledX[i]).toFixed(5)}`;
+      const color = run._leafletColorSpec;
+      const extra = color ? `\n${color.label}: ${fmtNum(color.values[i])}` : "";
+      const content = document.createElement("div");
+      content.textContent = `${run.label}\n${coord}${extra}`;
+      content.style.whiteSpace = "pre-line";
+      if (!this._tooltip) this._tooltip = L.tooltip({ direction: "top", offset: [0, -8] });
+      this._tooltip.setLatLng(latlng).setContent(content).openOn(this._map);
+    },
+
+    _clearHover(restore) {
+      this._lastHover = null;
+      if (this._map) {
+        this._map.getContainer().style.cursor = "";
+        if (this._tooltip) this._map.closeTooltip(this._tooltip);
+      }
+      if (restore) restorePlaybackPosition();
+    },
+  });
+  return new TrackCanvasLayer(view);
 }
 
 // 波形: 信号ごとに帯を積み重ね、X軸 (時間/サンプル) を共有
@@ -1093,11 +1252,7 @@ function renderWave(view) {
 // ---------- 地図 ⇔ 波形 の連動カーソル ----------
 
 function wireLinkedCursor(view) {
-  const mapEl = $("#mp-map");
   const waveEl = $("#mp-wave");
-  mapEl.removeAllListeners?.("plotly_hover");
-  mapEl.removeAllListeners?.("plotly_unhover");
-  mapEl.removeAllListeners?.("plotly_click");
   waveEl.removeAllListeners?.("plotly_hover");
   waveEl.removeAllListeners?.("plotly_unhover");
   waveEl.removeAllListeners?.("plotly_click");
@@ -1110,49 +1265,12 @@ function wireLinkedCursor(view) {
   });
   waveEl.on?.("plotly_unhover", restorePlaybackPosition);
   waveEl.on?.("plotly_click", (ev) => seekFromPlotEvent(view, ev));
-
-  // 地図にホバー → 波形に縦線を引く
-  mapEl.on?.("plotly_hover", (ev) => {
-    const point = ev.points?.[0]?.customdata;
-    if (!point) return;
-    showLinkedForPoint(view, point);
-  });
-  mapEl.on?.("plotly_unhover", restorePlaybackPosition);
-  mapEl.on?.("plotly_click", (ev) => seekFromPlotEvent(view, ev));
-}
-
-// 地図(MapLibre)はスタイル読み込み完了前に restyle すると "Style is not done loading"
-// を投げる。これが描画直後の連動ハイライト時に発生し、例外が波形描画まで巻き込んで
-// 消してしまっていた。投げても握りつぶし、読み込み完了後に一度だけ再適用する。
-function safeMapRestyle(update, indices, attempt = 0) {
-  const el = $("#mp-map");
-  if (!el || !el.data) return;
-  const retry = (e) => {
-    if (attempt < 20 && /style/i.test(e?.message || "")) {
-      setTimeout(() => safeMapRestyle(update, indices, attempt + 1), 150);
-    }
-    // それ以外の例外は握りつぶす (次の操作で反映される)
-  };
-  try {
-    // Plotly.restyle は同期 throw と Promise reject の両方があり得る。
-    // try/catch だけでは後者が未処理エラーになるため、明示的に catch する。
-    Promise.resolve(Plotly.restyle(el, update, indices)).catch(retry);
-  } catch (e) {
-    retry(e);
-  }
 }
 
 function highlightMapPoint(view, runIndex, idx) {
-  const mapEl = $("#mp-map");
-  if (!mapEl.data) return;
   const run = view.runs[runIndex];
-  const res = run.res;
-  const hi = mapEl.data.findIndex((trace) => trace.meta?.highlightFor === runIndex);
-  if (hi < 0) return;
-  const update = res.mode === "planar"
-    ? { x: [[run.course.filledX[idx]]], y: [[run.course.filledY[idx]]], visible: true }
-    : { lat: [[run.course.filledY[idx]]], lon: [[run.course.filledX[idx]]], visible: true };
-  safeMapRestyle(update, [hi]);
+  if (!run?.mapCompatible) return;
+  leafletTrackLayer?.setHighlight(runIndex, idx);
 }
 
 function verticalLine(x) {
@@ -1190,7 +1308,7 @@ $("#mp-play-seek-b").addEventListener("input", (event) => {
 });
 
 const applyAlignment = debounce(() => {
-  if (!playback.res?.secondary) return;
+  if (!playback.res?.secondary || !window.Plotly) return;
   renderWave(playback.res);
   wireLinkedCursor(playback.res);
   setPlaybackIndex(playback.index);
@@ -1376,7 +1494,7 @@ function showLinkedAtTime(view, masterTime) {
     const idx = nearestIndex(run.times, rawTime);
     highlightMapPoint(view, runIndex, idx);
   });
-  if (Object.keys(view.primary.signals).length) {
+  if (window.Plotly && Object.keys(view.primary.signals).length) {
     const x = view.secondary
       ? masterTime
       : (view.primary.x_values || view.primary.index)[nearestIndex(view.runs[0].times, masterTime)];
@@ -1389,7 +1507,7 @@ function showLinkedAtCourseProgress(view, progress) {
     const idx = nearestIndex(run.course.progress, progress);
     highlightMapPoint(view, runIndex, idx);
   });
-  if (Object.keys(view.primary.signals).length) {
+  if (window.Plotly && Object.keys(view.primary.signals).length) {
     Plotly.relayout("mp-wave", { shapes: [verticalLine(progress * 100)] });
   }
 }
@@ -1404,10 +1522,7 @@ function showLinkedForPoint(view, point) {
 }
 
 function hideMapPoint(runIndex) {
-  const mapEl = $("#mp-map");
-  if (!mapEl.data) return;
-  const hi = mapEl.data.findIndex((trace) => trace.meta?.highlightFor === runIndex);
-  if (hi >= 0) safeMapRestyle({ visible: false }, [hi]);
+  leafletTrackLayer?.hideHighlight(runIndex);
 }
 
 function restorePlaybackPosition() {

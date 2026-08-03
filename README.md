@@ -3,8 +3,8 @@
 車両データ (CSV / Parquet) をローカルに永続化し、高速に可視化するダッシュボードプラットフォームです。
 
 - **バックエンド**: FastAPI + DuckDB (分析クエリ) + SQLite (メタデータ)
-- **フロントエンド**: Plotly.js + Fluent Design (Microsoft) 基調の UI
-- **完全ローカル動作**: 外部 CDN 不要 (plotly.js もローカル配信)
+- **フロントエンド**: Leaflet (GPS 地図) + Plotly.js (波形・分析グラフ) + Fluent Design (Microsoft) 基調の UI
+- **完全ローカル動作**: 外部 CDN 不要 (Leaflet / plotly.js ともにローカル配信)
 
 ## 機能
 

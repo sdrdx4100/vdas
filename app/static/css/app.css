@@ -757,6 +757,27 @@ table.data td.num { font-variant-numeric: tabular-nums; }
   text-align: right;
 }
 
+#mp-map {
+  position: relative;
+  padding: 0;
+  overflow: hidden;
+  background: var(--chart-surface);
+}
+
+#mp-map.leaflet-offline {
+  background-color: var(--chart-surface);
+  background-image:
+    linear-gradient(var(--chart-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--chart-grid) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+#mp-map.leaflet-planar { cursor: crosshair; }
+#mp-map.leaflet-container { font-family: "Segoe UI", system-ui, sans-serif; }
+#mp-map .leaflet-control-attribution { font-size: 10px; }
+#mp-map .leaflet-tooltip { color: #202020; }
+.vdas-track-canvas { pointer-events: none; }
+
 @media (max-width: 1100px) {
   .grid-2 { grid-template-columns: 1fr; }
   .cohort-builder-grid { grid-template-columns: 1fr; }

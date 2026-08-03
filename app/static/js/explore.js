@@ -1,7 +1,7 @@
 /* 自由分析タブ (万能チャートビルダー)
    グラフ種別 × X・Y・色分け・集計・フィルタを自由に組み合わせる。
    集計「割合%」は色グループ内で正規化するため、N数の違う対象の比較に使える。 */
-import { $, $$, api, toast, debounce, esc, fmtNum } from "./api.js";
+import { $, $$, api, apiLatest, isAbortError, toast, debounce, esc, fmtNum } from "./api.js";
 import { state } from "./state.js";
 import { renderChart, baseLayout, PLOT_CONFIG, seriesColors, cssVar } from "./charts.js";
 import { columnOptions, loadSchema, renderFilters, activeFilters } from "./filters.js";
@@ -203,7 +203,7 @@ export async function plotExplore(auto = false) {
     max_points: +$("#ex-points").value || 5000,
   };
   try {
-    const res = await api(`/api/datasets/${dsId}/chart`, {
+    const res = await apiLatest("explore-chart", `/api/datasets/${dsId}/chart`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(spec),
@@ -211,7 +211,7 @@ export async function plotExplore(auto = false) {
     renderExStats(res);
     renderChart("ex-chart", () => renderExChart(res, spec));
   } catch (e) {
-    toast(`エラー: ${e.message}`, "error");
+    if (!isAbortError(e)) toast(`エラー: ${e.message}`, "error");
   }
 }
 
@@ -405,7 +405,7 @@ async function plotExploreGroups(auto = false) {
     max_points: +$("#ex-points").value || 5000,
   };
   try {
-    const res = await api("/api/chart/groups", {
+    const res = await apiLatest("explore-chart", "/api/chart/groups", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(spec),
@@ -413,7 +413,7 @@ async function plotExploreGroups(auto = false) {
     renderExGroupStats(res);
     renderChart("ex-chart", () => renderExGroupChart(res, spec));
   } catch (e) {
-    toast(`エラー: ${e.message}`, "error");
+    if (!isAbortError(e)) toast(`エラー: ${e.message}`, "error");
   }
 }
 

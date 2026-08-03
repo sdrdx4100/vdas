@@ -1,8 +1,8 @@
 """DuckDB (データ本体) と SQLite (メタデータ) への接続管理。
 
-FastAPI は複数スレッドからハンドラを呼ぶため、それぞれの接続を
-ロックで直列化して使う。分析クエリは DuckDB 側で実行されるので
-この粒度のロックで実用上十分な性能が出る。
+DuckDB の読み取りはリクエストごとに独立カーソルを使って並行実行し、
+テーブル変更を伴う処理だけを排他する。これにより複数グラフの取得が
+互いを待たず、取込・削除中にスキーマが変わることも防ぐ。
 """
 from __future__ import annotations
 
@@ -15,7 +15,48 @@ import duckdb
 
 from .config import DUCKDB_PATH, META_DB_PATH, ensure_dirs
 
-_duck_lock = threading.Lock()
+class _ReadWriteLock:
+    """書き手を優先し、書き込みの飢餓を防ぐ小さなRWロック。"""
+
+    def __init__(self) -> None:
+        self._condition = threading.Condition()
+        self._readers = 0
+        self._writer = False
+        self._writers_waiting = 0
+
+    @contextmanager
+    def read(self) -> Iterator[None]:
+        with self._condition:
+            while self._writer or self._writers_waiting:
+                self._condition.wait()
+            self._readers += 1
+        try:
+            yield
+        finally:
+            with self._condition:
+                self._readers -= 1
+                if self._readers == 0:
+                    self._condition.notify_all()
+
+    @contextmanager
+    def write(self) -> Iterator[None]:
+        with self._condition:
+            self._writers_waiting += 1
+            try:
+                while self._writer or self._readers:
+                    self._condition.wait()
+                self._writer = True
+            finally:
+                self._writers_waiting -= 1
+        try:
+            yield
+        finally:
+            with self._condition:
+                self._writer = False
+                self._condition.notify_all()
+
+
+_duck_lock = _ReadWriteLock()
 _meta_lock = threading.Lock()
 _duck_conn: duckdb.DuckDBPyConnection | None = None
 _meta_conn: sqlite3.Connection | None = None
@@ -79,11 +120,36 @@ def _migrate(con: sqlite3.Connection) -> None:
 
 
 @contextmanager
-def duck() -> Iterator[duckdb.DuckDBPyConnection]:
+def duck_write() -> Iterator[duckdb.DuckDBPyConnection]:
+    """永続テーブルを変更する処理向けの排他接続。"""
     if _duck_conn is None:
         init()
-    with _duck_lock:
+    with _duck_lock.write():
         yield _duck_conn  # type: ignore[misc]
+
+
+@contextmanager
+def duck_read() -> Iterator[duckdb.DuckDBPyConnection]:
+    """並行実行できる読み取り接続。
+
+    ``cursor()`` は同じDBを参照する独立接続を返す。親接続を直接共有せず、
+    各スレッドのクエリ状態や一時オブジェクトが衝突しないようにする。
+    """
+    if _duck_conn is None:
+        init()
+    with _duck_lock.read():
+        cursor = _duck_conn.cursor()  # type: ignore[union-attr]
+        try:
+            yield cursor
+        finally:
+            cursor.close()
+
+
+@contextmanager
+def duck() -> Iterator[duckdb.DuckDBPyConnection]:
+    """読み取り接続。既存のクエリ呼び出しとの互換名。"""
+    with duck_read() as con:
+        yield con
 
 
 @contextmanager
@@ -101,7 +167,7 @@ def reset_duckdb() -> None:
     全削除のときは接続を閉じてファイルごと作り直す。
     """
     global _duck_conn
-    with _duck_lock:
+    with _duck_lock.write():
         if _duck_conn is not None:
             _duck_conn.close()
             _duck_conn = None

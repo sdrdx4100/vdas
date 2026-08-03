@@ -42,7 +42,7 @@ def run_clustering(dataset_id: str, features: list[str], k: int = 4,
         raise QueryError("結果列名に使えない文字が含まれています")
 
     feat_sql = ", ".join(_quote(f) for f in features)
-    with db.duck() as con:
+    with db.duck_read() as con:
         rel = con.execute(f"SELECT rowid AS __rid, {feat_sql} FROM {_quote(table)}")
         data = rel.fetchnumpy()
 
@@ -80,7 +80,7 @@ def run_clustering(dataset_id: str, features: list[str], k: int = 4,
     if column_name in cols:
         exclude.append(column_name)  # 同名列は上書き
     exclude_sql = ", ".join(_quote(c) for c in exclude)
-    with db.duck() as con:
+    with db.duck_write() as con:
         con.register("__cluster_labels", label_df)
         con.execute(f'DROP TABLE IF EXISTS "{tmp_table}"')
         con.execute(

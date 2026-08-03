@@ -45,7 +45,7 @@ def ingest_file(fileobj: BinaryIO, original_filename: str, dataset_name: str | N
         shutil.copyfileobj(fileobj, out)
 
     try:
-        with db.duck() as con:
+        with db.duck_write() as con:
             if ext == ".csv":
                 reader = "read_csv_auto(?, sample_size=-1)"
             else:
@@ -89,12 +89,12 @@ def concat_datasets(dataset_ids: list[str], name: str | None = None,
     union_sql = " UNION ALL BY NAME ".join(
         f'SELECT * FROM "{p["table_name"]}"' for p in parts)
     try:
-        with db.duck() as con:
+        with db.duck_write() as con:
             con.execute(f'CREATE TABLE "{table_name}" AS {union_sql}')
             row_count = con.execute(f'SELECT count(*) FROM "{table_name}"').fetchone()[0]
             columns = con.execute(f'DESCRIBE "{table_name}"').fetchall()
     except Exception as e:
-        with db.duck() as con:
+        with db.duck_write() as con:
             con.execute(f'DROP TABLE IF EXISTS "{table_name}"')
         raise IngestError(f"データセットの結合に失敗しました: {e}") from e
 
@@ -163,7 +163,7 @@ def all_tags() -> list[str]:
 
 def delete_dataset(dataset_id: str) -> None:
     ds = get_dataset(dataset_id)
-    with db.duck() as con:
+    with db.duck_write() as con:
         con.execute(f'DROP TABLE IF EXISTS "{ds["table_name"]}"')
     Path(ds["stored_path"]).unlink(missing_ok=True)
     db.meta_execute("DELETE FROM datasets WHERE id = ?", (dataset_id,))
@@ -212,7 +212,7 @@ def dataset_schema(dataset_id: str) -> dict[str, Any]:
     ds = get_dataset(dataset_id)
     columns = _schema_cache.get(dataset_id)
     if columns is None:
-        with db.duck() as con:
+        with db.duck_read() as con:
             described = con.execute(f'DESCRIBE "{ds["table_name"]}"').fetchall()
         numeric_prefixes = ("TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT",
                             "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT",

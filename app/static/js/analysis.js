@@ -1,7 +1,7 @@
 /* 自由分析タブ: タググループ統計分析。
    ①タグでグループを選ぶ → ②分析の種類を1つ選ぶ → ③最小限の設定 → 結果1枚。
    すべて変更で自動更新。バックエンドは /api/compare/cohorts/* を利用する。 */
-import { $, $$, api, toast, debounce, esc, fmtNum } from "./api.js";
+import { $, $$, api, apiLatest, isAbortError, toast, debounce, esc, fmtNum } from "./api.js";
 import { state } from "./state.js";
 import { renderChart, baseLayout, PLOT_CONFIG, seriesColors } from "./charts.js";
 import { loadSchema, renderFilters, activeFilters } from "./filters.js";
@@ -241,7 +241,7 @@ export async function runAnalysis(auto = false) {
   if (!cohorts.length) return auto || toast("グループのタグを1つ以上選択してください", "error");
   const kind = state.an.kind;
   const filters = activeFilters(state.an);
-  const post = (path, body) => api(path, {
+  const post = (path, body) => apiLatest("analysis-result", path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ cohorts, filters, ...body }),
@@ -316,7 +316,7 @@ export async function runAnalysis(auto = false) {
       renderSpectrumResult(res);
     }
   } catch (e) {
-    toast(`分析エラー: ${e.message}`, "error");
+    if (!isAbortError(e)) toast(`分析エラー: ${e.message}`, "error");
   }
 }
 

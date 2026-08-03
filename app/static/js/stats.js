@@ -1,5 +1,5 @@
 /* 全体統計可視化タブ: 基本統計量・ヒストグラム・散布図・相関行列 */
-import { $, api, toast, debounce, esc } from "./api.js";
+import { $, api, apiLatest, isAbortError, toast, debounce, esc } from "./api.js";
 import { state } from "./state.js";
 import { loadSchema, columnOptions, renderFilters, activeFilters } from "./filters.js";
 import { seriesColors, baseLayout, PLOT_CONFIG, renderChart } from "./charts.js";
@@ -51,7 +51,7 @@ export async function loadSummary(auto = false) {
   const dsId = $("#st-dataset").value;
   if (!dsId) return auto || toast("データセットを選択してください", "error");
   try {
-    const res = await api(`/api/datasets/${dsId}/summary`);
+    const res = await apiLatest("stats-summary", `/api/datasets/${dsId}/summary`);
     const cols = ["column_name", "column_type", "count", "null_percentage",
       "min", "max", "avg", "std", "q25", "q50", "q75", "approx_unique"];
     const headers = ["列名", "型", "件数", "NULL%", "最小", "最大", "平均", "標準偏差", "Q25", "中央値", "Q75", "ユニーク数"];
@@ -66,7 +66,7 @@ export async function loadSummary(auto = false) {
     ).join("");
     $("#summary-empty").style.display = "none";
   } catch (e) {
-    toast(`エラー: ${e.message}`, "error");
+    if (!isAbortError(e)) toast(`エラー: ${e.message}`, "error");
   }
 }
 
@@ -77,7 +77,7 @@ async function plotHistogram(auto = false) {
   const column = $("#hist-col").value;
   if (!dsId || !column) return auto || toast("データセットと列を選択してください", "error");
   try {
-    const res = await api(`/api/datasets/${dsId}/histogram`, {
+    const res = await apiLatest("stats-histogram", `/api/datasets/${dsId}/histogram`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ column, bins: +$("#hist-bins").value || 40, filters: activeFilters(state.st) }),
@@ -100,7 +100,7 @@ async function plotHistogram(auto = false) {
       }), PLOT_CONFIG);
     });
   } catch (e) {
-    toast(`エラー: ${e.message}`, "error");
+    if (!isAbortError(e)) toast(`エラー: ${e.message}`, "error");
   }
 }
 
@@ -111,7 +111,7 @@ async function plotStScatter(auto = false) {
   const x = $("#sc-x").value, y = $("#sc-y").value, color = $("#sc-color").value || null;
   if (!dsId || !x || !y) return auto || toast("データセットとX/Y列を選択してください", "error");
   try {
-    const res = await api(`/api/datasets/${dsId}/scatter`, {
+    const res = await apiLatest("stats-scatter", `/api/datasets/${dsId}/scatter`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ x, y, color, filters: activeFilters(state.st), max_points: 5000 }),
@@ -150,7 +150,7 @@ async function plotStScatter(auto = false) {
       }), PLOT_CONFIG);
     });
   } catch (e) {
-    toast(`エラー: ${e.message}`, "error");
+    if (!isAbortError(e)) toast(`エラー: ${e.message}`, "error");
   }
 }
 
@@ -160,7 +160,7 @@ async function plotCorrelation(auto = false) {
   const dsId = $("#st-dataset").value;
   if (!dsId) return auto || toast("データセットを選択してください", "error");
   try {
-    const res = await api(`/api/datasets/${dsId}/correlation`, {
+    const res = await apiLatest("stats-correlation", `/api/datasets/${dsId}/correlation`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ filters: activeFilters(state.st) }),
@@ -184,7 +184,7 @@ async function plotCorrelation(auto = false) {
       }), PLOT_CONFIG);
     });
   } catch (e) {
-    toast(`エラー: ${e.message}`, "error");
+    if (!isAbortError(e)) toast(`エラー: ${e.message}`, "error");
   }
 }
 

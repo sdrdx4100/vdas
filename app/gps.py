@@ -15,13 +15,10 @@ GPS は信号ログとは別ファイル (同名の Parquet) として記録さ�
 """
 from __future__ import annotations
 
-import bisect
 import math
 import re
 from datetime import datetime
 from typing import Any
-
-import pandas as pd
 
 from . import db
 from .ingest import dataset_schema, get_dataset, list_datasets
@@ -481,40 +478,37 @@ def _time_seconds_expr(dataset_id: str) -> str | None:
     return f"{start.timestamp()!r} + {_quote(elapsed)}"
 
 
-def _time_based_row_map(con: Any, sig_table: str, sig_time_expr: str, sig_where: str,
-                        sig_params: tuple[Any, ...], gps_table: str,
-                        gps_time_expr: str) -> list[tuple[Any, Any]] | None:
-    """信号側の各行 (フィルタ後) を、実際の時刻が最も近い GPS 側の rowid に
-    対応づける (行位置がずれていても、記録開始日時・サンプリング周期の
-    違いを吸収できる)。ズレの中央値が大きすぎる場合は信頼できないと
-    みなし None を返す (呼び出し側は rowid 結合にフォールバックする)。
+def _time_alignment_sql(sig_table: str, sig_time_expr: str, sig_where: str,
+                        gps_table: str, gps_time_expr: str) -> str:
+    """各信号行に最も近いGPS行を対応づけるDuckDB SQLを返す。
+
+    ASOF JOINを前後方向に1回ずつ使い、直前・直後のうち時刻差が小さい方を
+    選ぶ。対応表をPythonへ取り出さないため、行数に比例する巨大なlistや
+    DataFrameを作らずに済む。
     """
-    sig_rows = con.execute(
-        f"SELECT rowid, {sig_time_expr} FROM {_quote(sig_table)}{sig_where} ORDER BY rowid",
-        sig_params).fetchall()
-    gps_rows = con.execute(
-        f"SELECT rowid, {gps_time_expr} FROM {_quote(gps_table)} ORDER BY 2").fetchall()
-    if not sig_rows or not gps_rows:
-        return None
-    if any(r[1] is None for r in sig_rows) or any(r[1] is None for r in gps_rows):
-        return None
-    gps_rids = [r[0] for r in gps_rows]
-    gps_times = [r[1] for r in gps_rows]
-
-    mapping: list[tuple[Any, Any]] = []
-    deltas: list[float] = []
-    for sig_rid, sig_t in sig_rows:
-        i = bisect.bisect_left(gps_times, sig_t)
-        candidates = [j for j in (i - 1, i) if 0 <= j < len(gps_times)]
-        best = min(candidates, key=lambda j: abs(gps_times[j] - sig_t))
-        mapping.append((sig_rid, gps_rids[best]))
-        deltas.append(abs(gps_times[best] - sig_t))
-
-    deltas.sort()
-    median_dt = deltas[len(deltas) // 2]
-    if median_dt > TIME_ALIGN_MAX_MEDIAN_DT_SEC:
-        return None
-    return mapping
+    return (
+        "WITH __sig_time AS ("
+        f" SELECT rowid AS sig_r, {sig_time_expr} AS sig_t"
+        f" FROM {_quote(sig_table)}{sig_where}"
+        f"), __gps_time AS ("
+        f" SELECT rowid AS gps_r, {gps_time_expr} AS gps_t"
+        f" FROM {_quote(gps_table)} WHERE {gps_time_expr} IS NOT NULL"
+        "), __previous AS ("
+        " SELECT s.sig_r, s.sig_t, p.gps_r AS prev_r, p.gps_t AS prev_t"
+        " FROM __sig_time s ASOF LEFT JOIN __gps_time p ON s.sig_t >= p.gps_t"
+        "), __nearest AS ("
+        " SELECT p.*, n.gps_r AS next_r, n.gps_t AS next_t"
+        " FROM __previous p ASOF LEFT JOIN __gps_time n ON p.sig_t <= n.gps_t"
+        ") SELECT sig_r,"
+        " CASE WHEN prev_r IS NULL THEN next_r"
+        "      WHEN next_r IS NULL THEN prev_r"
+        "      WHEN abs(sig_t - prev_t) <= abs(next_t - sig_t) THEN prev_r"
+        "      ELSE next_r END AS gps_r,"
+        " CASE WHEN prev_r IS NULL THEN abs(next_t - sig_t)"
+        "      WHEN next_r IS NULL THEN abs(sig_t - prev_t)"
+        "      ELSE least(abs(sig_t - prev_t), abs(next_t - sig_t)) END AS delta"
+        " FROM __nearest WHERE sig_t IS NOT NULL AND (prev_r IS NOT NULL OR next_r IS NOT NULL)"
+    )
 
 
 def map_track(dataset_id: str, signals: list[str] | None = None,
@@ -609,39 +603,46 @@ def map_track(dataset_id: str, signals: list[str] | None = None,
     # rowid結合になり常に1:1で正しく揃うため、時刻ベース整列の判定は不要。
     align_mode = "self" if gps_id == dataset_id else "rowid"
     with db.duck() as con:
-        row_map = None
+        alignment_sql = None
+        alignment_params: list[Any] = []
         if align_mode != "self":
             sig_time_expr = _time_seconds_expr(dataset_id)
             gps_time_expr = _time_seconds_expr(gps_id)
             if sig_time_expr and gps_time_expr:
-                row_map = _time_based_row_map(
-                    con, sig_table, sig_time_expr, where, params, gps_table, gps_time_expr)
-        try:
-            if row_map:
-                align_mode = "time"
-                con.register("__gps_align_map", pd.DataFrame(row_map, columns=["sig_r", "gps_r"]))
-                join_clause = (f'JOIN __gps_align_map m ON f.__r = m.sig_r '
-                              f'JOIN {_quote(gps_table)} g ON g.rowid = m.gps_r')
-            else:
-                join_clause = f'JOIN {_quote(gps_table)} g ON f.__r = g.rowid'
+                candidate_sql = _time_alignment_sql(
+                    sig_table, sig_time_expr, where, gps_table, gps_time_expr)
+                aligned = con.execute(
+                    f"SELECT count(*), median(delta) FROM ({candidate_sql})",
+                    params,
+                ).fetchone()
+                if (aligned and aligned[0] and aligned[1] is not None
+                        and aligned[1] <= TIME_ALIGN_MAX_MEDIAN_DT_SEC):
+                    alignment_sql = candidate_sql
+                    alignment_params = params
 
-            total = con.execute(
-                f"SELECT count(*) FROM (SELECT rowid AS __r FROM {_quote(sig_table)}{where}) f "
-                f"{join_clause}", params).fetchone()[0]
-            if not total:
-                raise QueryError(
-                    "結合できる行がありません (GPS と信号の行位置・時刻が一致していない可能性があります)")
-            stride = max(1, math.ceil(total / limit))
-            out_cols = [f"f.{_quote(c)}" for c in sel_cols] + [f"g.{_quote(c)}" for c in fetch_coords]
-            rows = con.execute(
-                f"SELECT f.__r, {', '.join(out_cols)} FROM ("
-                f"  SELECT rowid AS __r, {inner_sel}row_number() OVER (ORDER BY rowid) AS __rn"
-                f"  FROM {_quote(sig_table)}{where}"
-                f") f {join_clause} "
-                f"WHERE (f.__rn - 1) % {stride} = 0 ORDER BY f.__r", params).fetchall()
-        finally:
-            if row_map:
-                con.unregister("__gps_align_map")
+        if alignment_sql:
+            align_mode = "time"
+            join_clause = (f"JOIN ({alignment_sql}) m ON f.__r = m.sig_r "
+                           f"JOIN {_quote(gps_table)} g ON g.rowid = m.gps_r")
+        else:
+            join_clause = f'JOIN {_quote(gps_table)} g ON f.__r = g.rowid'
+
+        total = con.execute(
+            f"SELECT count(*) FROM (SELECT rowid AS __r FROM {_quote(sig_table)}{where}) f "
+            f"{join_clause}", params + alignment_params).fetchone()[0]
+        if not total:
+            raise QueryError(
+                "結合できる行がありません (GPS と信号の行位置・時刻が一致していない可能性があります)")
+        stride = max(1, math.ceil(total / limit))
+        out_cols = [f"f.{_quote(c)}" for c in sel_cols] + [f"g.{_quote(c)}" for c in fetch_coords]
+        rows = con.execute(
+            f"SELECT f.__r, {', '.join(out_cols)} FROM ("
+            f"  SELECT rowid AS __r, {inner_sel}row_number() OVER (ORDER BY rowid) AS __rn"
+            f"  FROM {_quote(sig_table)}{where}"
+            f") f {join_clause} "
+            f"WHERE (f.__rn - 1) % {stride} = 0 ORDER BY f.__r",
+            params + alignment_params,
+        ).fetchall()
 
     # 列の並び: __r, [sel_cols...], [fetch_coords...]
     index = [r[0] for r in rows]

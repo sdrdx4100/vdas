@@ -13,6 +13,22 @@ export async function api(path, opts = {}) {
   return res.json();
 }
 
+const latestControllers = new Map();
+
+// 同じ表示領域への古い通信を中断し、遅い応答が新しい描画を上書きするのを防ぐ。
+export async function apiLatest(key, path, opts = {}) {
+  latestControllers.get(key)?.abort();
+  const controller = new AbortController();
+  latestControllers.set(key, controller);
+  try {
+    return await api(path, { ...opts, signal: controller.signal });
+  } finally {
+    if (latestControllers.get(key) === controller) latestControllers.delete(key);
+  }
+}
+
+export const isAbortError = (error) => error?.name === "AbortError";
+
 export function toast(msg, kind = "ok") {
   const el = $("#toast");
   el.textContent = msg;

@@ -13,6 +13,7 @@ loadAliases();
 
 const mapAutoPlot = debounce(() => plotMap(true), 500);
 state.mp.onChange = mapAutoPlot;
+const MAX_WAVE_SIGNALS = 2;
 let selectedSignals = new Set();
 let gpsDatasets = [];
 let pairs = [];
@@ -352,6 +353,12 @@ $("#mp-col-search").addEventListener("input", renderSignalColumns);
 $("#mp-cols").addEventListener("change", (event) => {
   const input = event.target.closest('input[type="checkbox"]');
   if (!input) return;
+  if (input.checked && !selectedSignals.has(input.value)
+      && selectedSignals.size >= MAX_WAVE_SIGNALS) {
+    input.checked = false;
+    toast(`波形は同時に${MAX_WAVE_SIGNALS}つまで選択できます`, "error");
+    return;
+  }
   input.checked ? selectedSignals.add(input.value) : selectedSignals.delete(input.value);
   updateSelectionSummary();
   mapAutoPlot();
@@ -364,14 +371,18 @@ function selectedSignalList() {
 }
 
 function setSelectedSignals(cols) {
-  selectedSignals = new Set(cols);
+  selectedSignals = new Set(cols.slice(0, MAX_WAVE_SIGNALS));
   $$("#mp-cols input").forEach((el) => { el.checked = selectedSignals.has(el.value); });
   updateSelectionSummary();
 }
 
 function updateSelectionSummary() {
   const summary = $("#mp-selection-summary");
-  if (summary) summary.textContent = `${selectedSignals.size} 信号選択中`;
+  if (summary) summary.textContent = `${selectedSignals.size} / ${MAX_WAVE_SIGNALS} 信号選択中`;
+  const atLimit = selectedSignals.size >= MAX_WAVE_SIGNALS;
+  $$("#mp-cols input").forEach((input) => {
+    input.disabled = atLimit && !selectedSignals.has(input.value);
+  });
 }
 
 $("#mp-clear-selection").addEventListener("click", () => {
@@ -839,6 +850,7 @@ function ensureLeafletMap(mode) {
     attributionControl: mode !== "planar",
     zoomControl: true,
     minZoom: mode === "planar" ? -8 : 2,
+    maxZoom: mode === "planar" ? 12 : 18,
     preferCanvas: true,
   });
   L.control.scale({ imperial: false, maxWidth: 140 }).addTo(leafletMap);
@@ -881,6 +893,13 @@ function clearLeafletMap() {
 }
 
 function fitLeafletBounds(view) {
+  // 前回表示したルート用の制限を解除してから、今回のルートへ合わせる。
+  // fitBounds 後は初期表示の前後2段だけに絞り、ルートを見失うほどの
+  // 拡大・縮小を防ぐ。
+  const absoluteMin = view.mode === "planar" ? -8 : 2;
+  const absoluteMax = view.mode === "planar" ? 12 : 18;
+  leafletMap.setMinZoom(absoluteMin);
+  leafletMap.setMaxZoom(absoluteMax);
   const bounds = L.latLngBounds([]);
   let pointCount = 0;
   let onlyPoint = null;
@@ -902,6 +921,9 @@ function fitLeafletBounds(view) {
   } else {
     leafletMap.fitBounds(bounds, { padding: [28, 28], maxZoom: 17 });
   }
+  const fittedZoom = leafletMap.getZoom();
+  leafletMap.setMinZoom(Math.max(absoluteMin, fittedZoom - 2));
+  leafletMap.setMaxZoom(Math.min(absoluteMax, fittedZoom + 2));
 }
 
 const VIRIDIS = ["#440154", "#3b528b", "#21918c", "#5ec962", "#fde725"];

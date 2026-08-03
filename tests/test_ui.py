@@ -116,6 +116,12 @@ def test_analysis_workspace_and_modules_are_served() -> None:
         assert "for (let attempt = 0; attempt < 2" in leaflet_loader_js
         assert '"vdas-mapstyle-choice"' in map_js
         assert 'localStorage.getItem("vdas-mapstyle")' not in map_js
+        # 波形は最大2信号を保持して両方描画し、地図ズームは初期表示の前後2段に制限する
+        assert "const MAX_WAVE_SIGNALS = 2" in map_js
+        assert "cols.slice(0, MAX_WAVE_SIGNALS)" in map_js
+        assert "fittedZoom - 2" in map_js
+        assert "fittedZoom + 2" in map_js
+        assert "下部グラフ・最大2つ" in html
 
         for asset in (
             "/static/vendor/leaflet/leaflet.js",

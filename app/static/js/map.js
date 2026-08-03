@@ -30,19 +30,45 @@ const PLAYBACK_POINTS_PER_SECOND = 30;
 // ---------- 地図スタイル (実地図タイル / オフライン白地図) ----------
 // 実地図(open-street-map)はネット経由でタイルを取得する。取得できない環境では
 // MapLibre が "Style is not done loading." を投げ地図が出ないため、白地図へ切替可能。
-let mapStyle = localStorage.getItem("vdas-mapstyle") || "open-street-map";
+// 旧キーには自動フォールバックの white-bg まで保存していたため、明示選択用の
+// 新しいキーへ分離する。これで一度の通信失敗が以後ずっと白地図を固定しない。
+const MAP_STYLE_CHOICE_KEY = "vdas-mapstyle-choice";
+let mapStyle = localStorage.getItem(MAP_STYLE_CHOICE_KEY) || "open-street-map";
 let mapFellBack = false;  // 実地図タイル取得失敗で白地図に自動切替済みか
+let mapFallbackTimer = null;
+let expectedMapErrorsUntil = 0;
 
 const mapStyleSel = $("#mp-mapstyle");
 if (mapStyleSel) {
   mapStyleSel.value = mapStyle;
   mapStyleSel.addEventListener("change", () => {
     mapStyle = mapStyleSel.value;
-    localStorage.setItem("vdas-mapstyle", mapStyle);
+    localStorage.setItem(MAP_STYLE_CHOICE_KEY, mapStyle);
     mapFellBack = false;  // 明示切替で自動フォールバック状態をリセット
     plotMap(true);
   });
 }
+
+// MapLibre はタイル要求が即座に失敗すると、内部インスタンスへ error リスナーを
+// 付けられるより先に既定の "Map error." を window へ投げる。この既知の背景地図
+// エラーだけを捕捉し、通常の描画エラーは隠さず白地図へ回復させる。
+function interceptExpectedMapFailure(event) {
+  if (mapStyle === "white-bg" && Date.now() > expectedMapErrorsUntil) return;
+  const message = event.reason?.message || event.error?.message || event.message || "";
+  if (!/^(Map error\.?|Style is not done loading\.?)$/i.test(message)) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  fallbackToBlankMap();
+}
+window.addEventListener("error", interceptExpectedMapFailure, true);
+window.addEventListener("unhandledrejection", interceptExpectedMapFailure, true);
+window.addEventListener("vdas-unhandled-error", (event) => {
+  if (mapStyle === "white-bg" && Date.now() > expectedMapErrorsUntil) return;
+  const message = event.detail?.message || String(event.detail || "");
+  if (!/^(Map error\.?|Style is not done loading\.?)$/i.test(message)) return;
+  event.preventDefault();
+  fallbackToBlankMap();
+});
 
 function maplibreInstance() {
   try {
@@ -61,16 +87,27 @@ function fallbackToBlankMap() {
   if (mapFellBack || mapStyle === "white-bg") return;
   mapFellBack = true;
   mapStyle = "white-bg";
-  localStorage.setItem("vdas-mapstyle", mapStyle);  // 次回以降は実地図を試さない
+  expectedMapErrorsUntil = Date.now() + 10000;
   if (mapStyleSel) mapStyleSel.value = "white-bg";
   toast("地図タイルを取得できないため白地図(オフライン)に切り替えました。実地図に戻すには「地図スタイル」で選び直してください", "error");
-  plotMap(true);
+  // MapLibre の error イベント処理中に同じ描画領域へ Plotly.react すると、
+  // 古いスタイルの破棄と新しい初期化が衝突する。イベントを抜けてから描画し直す。
+  clearTimeout(mapFallbackTimer);
+  mapFallbackTimer = setTimeout(() => {
+    mapFallbackTimer = null;
+    plotMap(true);
+  }, 100);
 }
 
-function attachMapErrorFallback() {
+function attachMapErrorFallback(attempt = 0) {
   if (mapStyle === "white-bg") return;
   const mm = maplibreInstance();
-  if (!mm) return;
+  if (!mm) {
+    // Plotly.react の Promise 完了前にタイル取得が始まるため、MapLibre の
+    // インスタンスが生えるまで短時間だけ待ち、error リスナーを先に付ける。
+    if (attempt < 40) setTimeout(() => attachMapErrorFallback(attempt + 1), 50);
+    return;
+  }
   if (!mm.__vdasHooked) {
     mm.__vdasHooked = true;
     mm.on("error", fallbackToBlankMap);
@@ -532,8 +569,12 @@ export async function plotMap(auto = false) {
           (resB ? ` / B:${fmtNum(view.runs[1].course.estimatedCount)}点` : "") + "</span> "
         : "") +
       `${gpsChip}${modeChip} ${alignChip}${mismatchChip}`;
-    renderChart("mp-map", () => renderMap(view));
-    renderChart("mp-wave", () => renderWave(view));
+    // scattermap の初期化は非同期。完了前に連動カーソルの restyle を呼ぶと
+    // "Style is not done loading" で地図が壊れるため、地図→波形の順に待つ。
+    await renderChart("mp-map", () => renderMap(view));
+    if (requestId !== mpRequestId) return;
+    await renderChart("mp-wave", () => renderWave(view));
+    if (requestId !== mpRequestId) return;
     // 連動・再生の初期化で万一エラーが出ても、描画済みのグラフは消さない
     try {
       wireLinkedCursor(view);
@@ -879,13 +920,29 @@ function renderGeographic(view) {
       meta: { highlightFor: runIndex },
     });
   }
-  Plotly.react("mp-map", traces, {
-    map: { style: mapStyle, center: view.primary.center, zoom: view.primary.zoom },
+  const requestedMapStyle = mapStyle;
+  const rendering = Plotly.react("mp-map", traces, {
+    map: { style: requestedMapStyle, center: view.primary.center, zoom: view.primary.zoom },
     margin: { l: 0, r: 0, t: 0, b: 0 }, showlegend: comparison,
     paper_bgcolor: cssVar("--chart-surface"), font: { color: cssVar("--text-primary") },
     // 実地図のスタイル/タイル取得に失敗すると react は reject するため、
     // 成功・失敗どちらでもフォールバック監視を仕掛ける
-  }, PLOT_CONFIG).then(attachMapErrorFallback, attachMapErrorFallback);
+  }, PLOT_CONFIG);
+  attachMapErrorFallback();
+  return rendering.then(() => {
+    if (requestedMapStyle === "white-bg" && mapFellBack) {
+      // 古い実地図インスタンスから遅れて届くエラーまで吸収してから通常状態へ戻す。
+      setTimeout(() => { mapFellBack = false; }, 500);
+    }
+  }).catch((error) => {
+    // 実地図タイル起因の Map error は白地図への切替で回復させる。
+    // white-bg 自体の失敗やそれ以外の描画エラーは呼び出し元へ返す。
+    if (requestedMapStyle !== "white-bg" && /map|style/i.test(error?.message || "")) {
+      fallbackToBlankMap();
+      return;
+    }
+    throw error;
+  });
 }
 
 // ローカル座標 (メートル等) → 等尺の平面軌跡として描く
@@ -942,7 +999,7 @@ function renderPlanar(view) {
     // 縦横を等尺にして軌跡の形が歪まないようにする
     yaxis: Object.assign(baseLayout().yaxis, { title: { text: view.primary.py_col }, scaleanchor: "x", scaleratio: 1 }),
   });
-  Plotly.react("mp-map", traces, layout, PLOT_CONFIG);
+  return Plotly.react("mp-map", traces, layout, PLOT_CONFIG);
 }
 
 function estimatedTrackCoords(x, y, estimated) {
@@ -965,7 +1022,7 @@ function renderWave(view) {
   if (!signals.length) {
     Plotly.purge("mp-wave");
     el.innerHTML = '<div class="empty-note" style="padding:24px;">波形に表示する信号を選択してください。</div>';
-    return;
+    return Promise.resolve();
   }
   el.innerHTML = "";
   const comparison = view.runs.length > 1;
@@ -1030,7 +1087,7 @@ function renderWave(view) {
   layout.xaxis = Object.assign(layout.xaxis, {
     domain: [0, 1], anchor: k === 1 ? "y" : `y${k}`, title: { text: xlabel },
   });
-  Plotly.react("mp-wave", traces, layout, PLOT_CONFIG);
+  return Plotly.react("mp-wave", traces, layout, PLOT_CONFIG);
 }
 
 // ---------- 地図 ⇔ 波形 の連動カーソル ----------
@@ -1070,13 +1127,18 @@ function wireLinkedCursor(view) {
 function safeMapRestyle(update, indices, attempt = 0) {
   const el = $("#mp-map");
   if (!el || !el.data) return;
-  try {
-    Plotly.restyle(el, update, indices);
-  } catch (e) {
+  const retry = (e) => {
     if (attempt < 20 && /style/i.test(e?.message || "")) {
       setTimeout(() => safeMapRestyle(update, indices, attempt + 1), 150);
     }
     // それ以外の例外は握りつぶす (次の操作で反映される)
+  };
+  try {
+    // Plotly.restyle は同期 throw と Promise reject の両方があり得る。
+    // try/catch だけでは後者が未処理エラーになるため、明示的に catch する。
+    Promise.resolve(Plotly.restyle(el, update, indices)).catch(retry);
+  } catch (e) {
+    retry(e);
   }
 }
 

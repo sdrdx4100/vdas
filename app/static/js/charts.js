@@ -29,7 +29,7 @@ export const PLOT_CONFIG = { responsive: true, displaylogo: false, locale: "ja" 
 export const chartRegistry = new Map();
 export function renderChart(elId, fn) {
   chartRegistry.set(elId, fn);
-  fn();
+  return fn();
 }
 
 // ---------- テーマ ----------

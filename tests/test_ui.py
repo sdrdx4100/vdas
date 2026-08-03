@@ -103,6 +103,12 @@ def test_analysis_workspace_and_modules_are_served() -> None:
         map_js = client.get("/static/js/map.js").text
         assert "function safeMapRestyle" in map_js
         assert "wireLinkedCursor(view)" in map_js
+        assert 'await renderChart("mp-map"' in map_js
+        assert "Promise.resolve(Plotly.restyle" in map_js
+        assert '"vdas-mapstyle-choice"' in map_js
+        assert 'localStorage.getItem("vdas-mapstyle")' not in map_js
+        assert "interceptExpectedMapFailure" in map_js
+        assert '"vdas-unhandled-error"' in map_js
 
         # 走行Bの取得失敗や座標形式の不一致で画面全体が消えないこと
         # (Aだけでも表示を続け、波形比較は座標形式に関係なく維持する)

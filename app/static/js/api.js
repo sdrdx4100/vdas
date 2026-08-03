@@ -39,6 +39,14 @@ export function toast(msg, kind = "ok") {
 
 // どこかで拾い損ねた非同期エラーも必ずユーザーに見せる (無反応にしない)
 window.addEventListener("unhandledrejection", (e) => {
+  const handled = !window.dispatchEvent(new CustomEvent("vdas-unhandled-error", {
+    cancelable: true,
+    detail: e.reason,
+  }));
+  if (handled) {
+    e.preventDefault();
+    return;
+  }
   toast(`エラー: ${e.reason?.message || e.reason}`, "error");
 });
 

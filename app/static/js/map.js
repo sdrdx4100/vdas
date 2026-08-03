@@ -14,6 +14,7 @@ state.mp.onChange = mapAutoPlot;
 let selectedSignals = new Set();
 let gpsDatasets = [];
 let pairs = [];
+let mapSelectsReady = false;
 let mpRequestId = 0;
 const playback = {
   res: null,
@@ -96,9 +97,11 @@ async function refreshMapSelects() {
       api("/api/gps/datasets"),
       api("/api/gps/pairs"),
     ]);
+    mapSelectsReady = true;
   } catch (_) {
     gpsDatasets = [];
     pairs = [];
+    mapSelectsReady = false;
   }
   const signals = signalCandidates();
   fillSelect($("#mp-dataset"), signals, "— 信号データを選択 —");
@@ -127,7 +130,10 @@ function fillSelect(sel, datasets, placeholder) {
   if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
 }
 
-export function onMapPageEnter() {
+export async function onMapPageEnter() {
+  // map.js はGPSタブを開くまで遅延ロードされるため、初回は datasets-refreshed を
+  // 受け取っていない。ここで一度だけGPS候補とペアを取得する。
+  if (!mapSelectsReady) await refreshMapSelects();
   const sel = $("#mp-dataset");
   if (!sel.value) {
     const first = signalCandidates()[0];

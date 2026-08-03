@@ -101,14 +101,14 @@ async function loadView(v) {
       // gotoPage より先にソースを切り替え、データセット側ハンドラの誤発火を防ぐ
       state.ex.groupTags = new Set(c.group_tags || []);
       setExSource("groups");
-      gotoPage("explore");
+      await gotoPage("explore");
       renderExGroupTags();
       await exRefreshSchema();
     } else {
       setExSource("dataset");
       $("#ex-dataset").value = v.dataset_id || "";
       state.ex.schema = null;
-      gotoPage("explore");
+      await gotoPage("explore");
       $("#ex-dataset").dispatchEvent(new Event("change"));
       await waitFor(() => state.ex.schema);
     }
@@ -136,13 +136,13 @@ async function loadView(v) {
   }
   const c = v.config || {};
   if (v.kind === "compare") {
-    gotoPage("compare");
+    await gotoPage("compare");
     await loadAnalysisView(v);
     toast(`ビュー「${v.name}」を読み込みました`);
     return;
   }
   if (v.kind === "timeseries") {
-    gotoPage("timeseries");
+    await gotoPage("timeseries");
     $("#ts-dataset").value = v.dataset_id || "";
     state.ts.schema = null; // change ハンドラが新しい schema を入れるまで待つ目印
     $("#ts-dataset").dispatchEvent(new Event("change"));
@@ -155,11 +155,11 @@ async function loadView(v) {
     if (c.mode) $("#ts-mode").value = c.mode;
     plotTimeseries();
   } else if (v.kind === "map") {
-    gotoPage("map");
+    await gotoPage("map");
     const { loadMapView } = await import("./map.js");
     await loadMapView(v);
   } else {
-    gotoPage("stats");
+    await gotoPage("stats");
     $("#st-dataset").value = v.dataset_id || "";
     state.st.schema = null;
     $("#st-dataset").dispatchEvent(new Event("change"));

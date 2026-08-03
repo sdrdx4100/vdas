@@ -61,6 +61,7 @@ def test_analysis_workspace_and_modules_are_served() -> None:
         for context in ("timeseries", "stats", "cluster"):
             assert f'data-analysis-context="{context}"' in html
         assert '<script type="module" src="/static/js/main.js"></script>' in html
+        assert '<script src="/vendor/plotly.min.js"></script>' not in html
         # 旧ワークスペースのUIは撤去済み
         assert 'data-cmp-mode="datasets"' not in html
         assert "cmp-cohort-builders" not in html
@@ -78,6 +79,7 @@ def test_analysis_workspace_and_modules_are_served() -> None:
             "explore.js",
             "main.js",
             "map.js",
+            "plotly-loader.js",
             "state.js",
             "tscompare.js",
             "workspace.js",
@@ -89,6 +91,13 @@ def test_analysis_workspace_and_modules_are_served() -> None:
                 "application/javascript",
                 "text/javascript",
             }
+
+        main_js = client.get("/static/js/main.js").text
+        nav_js = client.get("/static/js/nav.js").text
+        loader_js = client.get("/static/js/plotly-loader.js").text
+        assert 'import "./map.js"' not in main_js
+        assert 'await import("./map.js")' in nav_js
+        assert "for (let attempt = 0; attempt < 2" in loader_js
 
         # MapLibre のスタイル読込前エラーが波形描画を巻き込まないための保護
         map_js = client.get("/static/js/map.js").text
@@ -113,3 +122,15 @@ def test_analysis_workspace_and_modules_are_served() -> None:
         assert "loadAliases" in tscompare_js
 
         assert client.get("/static/js/compare.js").status_code == 404
+
+
+def test_plotly_bundle_is_compressed_cached_and_compatible() -> None:
+    with TestClient(app) as client:
+        response = client.get(
+            "/vendor/plotly.min.js",
+            headers={"Accept-Encoding": "gzip"},
+        )
+        assert response.status_code == 200
+        assert response.headers["content-encoding"] == "gzip"
+        assert "max-age=" in response.headers["cache-control"]
+        assert b"scattermap" in response.content

@@ -6,13 +6,16 @@ import "./timeseries.js";
 import "./stats.js";
 import "./explore.js";
 import "./analysis.js";
-import "./map.js";
 import "./tscompare.js";
 import "./clustering.js";
 import "./workspace.js";
 import { refreshDatasets } from "./datasets.js";
 import { refreshLabelsets } from "./views.js";
 import { toast } from "./api.js";
+import { preloadPlotly } from "./plotly-loader.js";
+
+// データ管理画面の初期表示を妨げず、ブラウザが空いた時点でグラフエンジンを先読みする。
+preloadPlotly();
 
 (async function init() {
   try {

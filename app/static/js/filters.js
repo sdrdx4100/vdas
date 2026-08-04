@@ -5,6 +5,23 @@ export async function loadSchema(datasetId) {
   return datasetId ? api(`/api/datasets/${datasetId}/schema`) : null;
 }
 
+// 数値列のチェックボックス一覧を描画する (時系列・クラスタリング・GPS地図で共通)。
+// columns はスキーマの列配列、query は絞り込み文字列、isChecked(name) は初期
+// チェック状態を返す関数 (省略時は全て未チェック)。呼び出し側の要約更新等は各自で。
+export function renderColumnCheckboxes(wrapSel, columns, query, isChecked) {
+  const wrap = $(wrapSel);
+  wrap.innerHTML = "";
+  const q = (query || "").trim().toLowerCase();
+  for (const c of (columns || [])) {
+    if (c.kind !== "numeric") continue;
+    if (q && !c.name.toLowerCase().includes(q)) continue;
+    const label = document.createElement("label");
+    label.innerHTML = `<input type="checkbox" value="${esc(c.name)}"><span>${esc(c.name)}</span><span class="col-type">${esc(c.type)}</span>`;
+    if (isChecked) label.querySelector("input").checked = isChecked(c.name);
+    wrap.appendChild(label);
+  }
+}
+
 export function columnOptions(schema, { numericOnly = false, blank = false } = {}) {
   let cols = schema ? schema.columns : [];
   if (numericOnly) cols = cols.filter((c) => c.kind === "numeric");

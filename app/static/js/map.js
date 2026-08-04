@@ -1,7 +1,7 @@
 /* GPS・地図タブ: 上部に走行軌跡の地図、下部に信号波形。行位置で連動する */
 import { $, $$, api, toast, debounce, fmtNum, esc, dsOptionLabel } from "./api.js";
 import { state } from "./state.js";
-import { loadSchema, columnOptions, renderFilters, activeFilters } from "./filters.js";
+import { loadSchema, columnOptions, renderFilters, activeFilters, renderColumnCheckboxes } from "./filters.js";
 import { seriesColors, baseLayout, PLOT_CONFIG, renderChart, chartRegistry, cssVar } from "./charts.js";
 import { openNameDialog } from "./modals.js";
 import { loadAliases, openAliasManager, resolveColumn } from "./aliases.js";
@@ -336,19 +336,9 @@ function updateSyncHint() {
 // ---------- 波形に出す信号の選択 ----------
 
 function renderSignalColumns() {
-  const wrap = $("#mp-cols");
-  wrap.innerHTML = "";
-  if (!state.mp.schema) return;
-  const q = $("#mp-col-search").value.trim().toLowerCase();
-  for (const c of state.mp.schema.columns) {
-    if (c.kind !== "numeric") continue;
-    if (q && !c.name.toLowerCase().includes(q)) continue;
-    const label = document.createElement("label");
-    label.innerHTML = `<input type="checkbox" value="${esc(c.name)}"><span>${esc(c.name)}</span><span class="col-type">${esc(c.type)}</span>`;
-    label.querySelector("input").checked = selectedSignals.has(c.name);
-    wrap.appendChild(label);
-  }
-  updateSelectionSummary();
+  renderColumnCheckboxes("#mp-cols", state.mp.schema?.columns,
+    $("#mp-col-search").value, (name) => selectedSignals.has(name));
+  if (state.mp.schema) updateSelectionSummary();
 }
 
 $("#mp-col-search").addEventListener("input", renderSignalColumns);

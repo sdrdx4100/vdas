@@ -1,7 +1,7 @@
 /* 時系列可視化タブ */
 import { $, $$, api, toast, debounce, fmtNum, esc } from "./api.js";
 import { state } from "./state.js";
-import { loadSchema, columnOptions, renderFilters, activeFilters } from "./filters.js";
+import { loadSchema, columnOptions, renderFilters, activeFilters, renderColumnCheckboxes } from "./filters.js";
 import { seriesColors, baseLayout, PLOT_CONFIG, renderChart, chartRegistry } from "./charts.js";
 import { openNameDialog } from "./modals.js";
 import { refreshLabelsets, refreshLabelsetSelect } from "./views.js";
@@ -74,19 +74,9 @@ $("#ts-x").addEventListener("change", tsAutoPlot);
 $("#ts-maxpoints").addEventListener("change", tsAutoPlot);
 
 function renderTsColumns() {
-  const wrap = $("#ts-cols");
-  wrap.innerHTML = "";
-  if (!state.ts.schema) return;
-  const q = $("#ts-col-search").value.trim().toLowerCase();
-  for (const c of state.ts.schema.columns) {
-    if (c.kind !== "numeric") continue;
-    if (q && !c.name.toLowerCase().includes(q)) continue;
-    const label = document.createElement("label");
-    label.innerHTML = `<input type="checkbox" value="${esc(c.name)}"><span>${esc(c.name)}</span><span class="col-type">${esc(c.type)}</span>`;
-    label.querySelector("input").checked = selectedColumns.has(c.name);
-    wrap.appendChild(label);
-  }
-  updateSelectionSummary();
+  renderColumnCheckboxes("#ts-cols", state.ts.schema?.columns,
+    $("#ts-col-search").value, (name) => selectedColumns.has(name));
+  if (state.ts.schema) updateSelectionSummary();
 }
 
 $("#ts-col-search").addEventListener("input", () => {

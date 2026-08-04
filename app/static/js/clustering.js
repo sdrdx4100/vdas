@@ -2,7 +2,7 @@
 import { $, $$, api, toast, fmtNum, esc } from "./api.js";
 import { state } from "./state.js";
 import { cssVar, seriesColors, baseLayout, PLOT_CONFIG, renderChart } from "./charts.js";
-import { loadSchema } from "./filters.js";
+import { loadSchema, renderColumnCheckboxes } from "./filters.js";
 
 $("#cl-dataset").addEventListener("change", async () => {
   state.cl.schema = await loadSchema($("#cl-dataset").value);
@@ -23,17 +23,7 @@ $("#cl-dataset").addEventListener("change", async () => {
 });
 
 function renderClColumns() {
-  const wrap = $("#cl-cols");
-  wrap.innerHTML = "";
-  if (!state.cl.schema) return;
-  const q = $("#cl-col-search").value.trim().toLowerCase();
-  for (const c of state.cl.schema.columns) {
-    if (c.kind !== "numeric") continue;
-    if (q && !c.name.toLowerCase().includes(q)) continue;
-    const label = document.createElement("label");
-    label.innerHTML = `<input type="checkbox" value="${esc(c.name)}"><span>${esc(c.name)}</span><span class="col-type">${esc(c.type)}</span>`;
-    wrap.appendChild(label);
-  }
+  renderColumnCheckboxes("#cl-cols", state.cl.schema?.columns, $("#cl-col-search").value);
 }
 
 $("#cl-col-search").addEventListener("input", () => {

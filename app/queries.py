@@ -772,6 +772,30 @@ def chart(dataset_id: str, kind: str, x: str | None = None, y: str | None = None
 MAX_CHART_GROUPS = 8
 
 
+def pool_source(dataset_ids: list[str], needed: list[str],
+                label: str = "") -> tuple[str, dict[str, dict[str, Any]]]:
+    """データセット群の needed 列だけを UNION ALL でプールした FROM ソースと、
+    共通の列マップを返す。列数の多い J1939 ログでも必要列だけ束ねるので軽い。
+
+    label はエラーメッセージ用のグループ名 (空なら「全データセット」とだけ表示)。
+    """
+    schemas = [_schema_map(ds_id) for ds_id in dataset_ids]
+    cols_map: dict[str, dict[str, Any]] = {}
+    for name in needed:
+        for _, cols in schemas:
+            if name not in cols:
+                where = f"グループ「{label}」の" if label else ""
+                raise QueryError(f"列「{name}」は{where}全データセットに存在しません")
+        cols_map[name] = schemas[0][1][name]
+    if len(dataset_ids) == 1:
+        src = _quote(schemas[0][0])
+    else:
+        cols_sql = ", ".join(_quote(c) for c in needed)
+        src = "(" + " UNION ALL ".join(
+            f"SELECT {cols_sql} FROM {_quote(t)}" for t, _ in schemas) + ")"
+    return src, cols_map
+
+
 def _group_chart_sources(groups: list[dict[str, Any]], needed: list[str]) -> list[tuple[str, str, dict[str, dict[str, Any]]]]:
     """グループ定義 [{label, dataset_ids}] を (label, FROM句ソース, 列マップ) に展開する。
 
@@ -790,19 +814,7 @@ def _group_chart_sources(groups: list[dict[str, Any]], needed: list[str]) -> lis
         label = str(g.get("label") or "?")
         if not ids:
             raise QueryError(f"グループ「{label}」にデータセットがありません")
-        schemas = [_schema_map(ds_id) for ds_id in ids]
-        cols_map: dict[str, dict[str, Any]] = {}
-        for n in needed:
-            for _, cols in schemas:
-                if n not in cols:
-                    raise QueryError(f"列「{n}」はグループ「{label}」の全データセットに存在しません")
-            cols_map[n] = schemas[0][1][n]
-        if len(ids) == 1:
-            src = _quote(schemas[0][0])
-        else:
-            cols_sql = ", ".join(_quote(c) for c in needed)
-            src = "(" + " UNION ALL ".join(
-                f"SELECT {cols_sql} FROM {_quote(t)}" for t, _ in schemas) + ")"
+        src, cols_map = pool_source(ids, needed, label)
         out.append((label, src, cols_map))
     return out
 

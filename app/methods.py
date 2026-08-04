@@ -29,21 +29,7 @@ def _group_sources(specs: list[dict[str, Any]], needed: list[str]):
     needed = [n for n in dict.fromkeys(needed) if n]
     out = []
     for cohort in resolution["cohorts"]:
-        ids = cohort["dataset_ids"]
-        schemas = [queries._schema_map(ds_id) for ds_id in ids]
-        cols_map: dict[str, dict[str, Any]] = {}
-        for name in needed:
-            for _, cols in schemas:
-                if name not in cols:
-                    raise queries.QueryError(
-                        f"列「{name}」はグループ「{cohort['name']}」の全データセットに存在しません")
-            cols_map[name] = schemas[0][1][name]
-        if len(ids) == 1:
-            src = queries._quote(schemas[0][0])
-        else:
-            cols_sql = ", ".join(queries._quote(c) for c in needed)
-            src = "(" + " UNION ALL ".join(
-                f"SELECT {cols_sql} FROM {queries._quote(t)}" for t, _ in schemas) + ")"
+        src, cols_map = queries.pool_source(cohort["dataset_ids"], needed, cohort["name"])
         out.append((cohort, src, cols_map))
     return resolution, out
 

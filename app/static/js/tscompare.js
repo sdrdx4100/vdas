@@ -129,6 +129,137 @@ $("#tc-offset-reset").addEventListener("click", () => {
   scheduleOffsetRerender();
 });
 
+// ---------- 自動整列 (基準信号の正規化相互相関でBのオフセットを推定) ----------
+// 停車(定常)区間の影響を抑えるため、各信号は平均を引いてから相関を取る。
+// 道路状況の違いで外すこともあるため、あくまで初期値の目安として使う。
+$("#tc-offset-auto").addEventListener("click", () => {
+  if (!lastPlot || lastPlot.mode === "ref") {
+    return toast("「時間+手動オフセット」モードで走行A・Bを表示してから実行してください", "error");
+  }
+  const { results, signals, xcol } = lastPlot;
+  if (results.length < 2) return toast("比較走行Bを選んでから実行してください", "error");
+  const [runA, runB] = results;
+  const common = signals.filter((s) => s in runA.res.data && s in runB.res.data);
+  if (!common.length) return toast("A・B共通の信号が無いため自動整列できません", "error");
+  // 速度らしい信号を優先 (動きが特徴的で合わせやすい)
+  const sig = common.find((s) => /speed|km\/?h|車速|rpm|回転/i.test(s)) || common[0];
+  const fit = bestOffset(runA.res.data[xcol], runA.res.data[sig], runB.res.data[xcol], runB.res.data[sig]);
+  if (!fit) return toast("自動整列に必要な数値データが不足しています", "error");
+  $("#tc-offset").value = String(fit.offset);
+  syncSliderFromNumber();
+  scheduleOffsetRerender();
+  const pct = Math.round(fit.score * 100);
+  const weak = fit.score < 0.4;
+  toast(`信号「${sig}」で自動整列 (一致度 ${pct}%)` +
+    (weak ? " — 低めです。停車区間や道路差の可能性、手動で微調整してください" : " — 必要なら手動で微調整を"),
+    weak ? "error" : "ok");
+});
+
+// 数値の (t, y) 対を昇順に抽出する。
+function numericPairs(ts, ys) {
+  const out = [];
+  const n = Math.min(ts.length, ys.length);
+  for (let i = 0; i < n; i += 1) {
+    const t = Number(ts[i]);
+    const y = Number(ys[i]);
+    if (Number.isFinite(t) && Number.isFinite(y)) out.push([t, y]);
+  }
+  out.sort((a, b) => a[0] - b[0]);
+  return out;
+}
+
+// (t,y) 列を [tmin, tmax] の等間隔グリッド(間隔 dt)へ線形補間する。
+function resampleUniform(pairs, tmin, tmax, dt) {
+  const n = Math.max(2, Math.round((tmax - tmin) / dt) + 1);
+  const grid = new Array(n);
+  let j = 0;
+  for (let k = 0; k < n; k += 1) {
+    const t = tmin + k * dt;
+    while (j < pairs.length - 2 && pairs[j + 1][0] < t) j += 1;
+    const [t0, y0] = pairs[Math.min(j, pairs.length - 1)];
+    const [t1, y1] = pairs[Math.min(j + 1, pairs.length - 1)];
+    if (t <= pairs[0][0]) grid[k] = pairs[0][1];
+    else if (t >= pairs[pairs.length - 1][0]) grid[k] = pairs[pairs.length - 1][1];
+    else grid[k] = t1 > t0 ? y0 + (y1 - y0) * ((t - t0) / (t1 - t0)) : y0;
+  }
+  return grid;
+}
+
+function zeroMean(arr) {
+  let sum = 0;
+  let cnt = 0;
+  for (const v of arr) if (Number.isFinite(v)) { sum += v; cnt += 1; }
+  const mean = cnt ? sum / cnt : 0;
+  for (let i = 0; i < arr.length; i += 1) arr[i] = Number.isFinite(arr[i]) ? arr[i] - mean : 0;
+}
+
+// 先頭・末尾の停車(定常・低値)区間を除いた「実走行」部分の範囲を返す。
+// 停車の長さがA/Bで違うと相関がそこに引きずられるため、Bはこの範囲だけ使う。
+function activeRange(grid) {
+  let mn = Infinity;
+  let mx = -Infinity;
+  for (const v of grid) if (Number.isFinite(v)) { if (v < mn) mn = v; if (v > mx) mx = v; }
+  if (!(mx > mn)) return [0, grid.length - 1];
+  const th = mn + (mx - mn) * 0.1;
+  let s = 0;
+  let e = grid.length - 1;
+  while (s < e && !(grid[s] >= th)) s += 1;
+  while (e > s && !(grid[e] >= th)) e -= 1;
+  return [s, e];
+}
+
+// A の時間軸上で B をずらし、正規化相互相関が最大になるオフセットを返す。
+// Bの停車区間を除いた実走行部分を、A内に十分収まる位置だけで探すことで、
+// 停車の長さ違いや端の偶発的な高相関に振り回されないようにする。
+function bestOffset(tA, yA, tB, yB) {
+  const A = numericPairs(tA, yA);
+  const B = numericPairs(tB, yB);
+  if (A.length < 4 || B.length < 4) return null;
+  const aMin = A[0][0];
+  const aMax = A[A.length - 1][0];
+  const bMin = B[0][0];
+  const bMax = B[B.length - 1][0];
+  const spanA = aMax - aMin;
+  const spanB = bMax - bMin;
+  if (spanA <= 0 || spanB <= 0) return null;
+  const dt = Math.max(spanA, spanB) / 600;
+  const zA = resampleUniform(A, aMin, aMax, dt);
+  const gBfull = resampleUniform(B, bMin, bMax, dt);
+  const [activeStart, activeEnd] = activeRange(gBfull);
+  const gB = gBfull.slice(activeStart, activeEnd + 1);
+  if (gB.length < 4) return null;
+  zeroMean(zA);
+  zeroMean(gB);
+  const na = zA.length;
+  const nb = gB.length;
+  const minOverlap = Math.max(8, Math.floor(nb * 0.85));  // Bの実走行がAにほぼ収まる位置だけ
+  let bestL = 0;
+  let bestScore = -Infinity;
+  for (let L = -(nb - minOverlap); L <= na - minOverlap; L += 1) {
+    let dot = 0;
+    let sa = 0;
+    let sb = 0;
+    let cnt = 0;
+    for (let m = 0; m < nb; m += 1) {
+      const k = m + L;
+      if (k < 0 || k >= na) continue;
+      dot += zA[k] * gB[m];
+      sa += zA[k] * zA[k];
+      sb += gB[m] * gB[m];
+      cnt += 1;
+    }
+    if (cnt < minOverlap) continue;
+    const denom = Math.sqrt(sa * sb);
+    const score = denom > 0 ? dot / denom : 0;
+    if (score > bestScore) { bestScore = score; bestL = L; }
+  }
+  if (!Number.isFinite(bestScore)) return null;
+  // Bの実走行開始 (bMin + activeStart*dt) が A時刻 (aMin + bestL*dt) に来る
+  const offset = (aMin - (bMin + activeStart * dt)) + bestL * dt;
+  const rounded = Math.abs(offset) >= 100 ? Math.round(offset) : Number(offset.toFixed(3));
+  return { offset: rounded, score: Math.max(0, bestScore) };
+}
+
 function applyXModeVisibility() {
   const ref = $("#tc-xmode").value === "ref";
   $("#tc-xref-wrap").hidden = !ref;
@@ -244,7 +375,9 @@ async function plot(auto = false) {
   const mode = $("#tc-xmode").value;
   const xcol = mode === "ref" ? $("#tc-xref").value : $("#tc-xtime").value;
   if (!xcol) return auto || toast("横軸の列を選択してください", "error");
-  const signals = selectedList(state.tc.schemaA);
+  // 横軸(整列軸)と同じ列は信号として重ねない (時間vs時間の無意味な描画や、
+  // x列をyにも要求したときの重複取得を避ける)。
+  const signals = selectedList(state.tc.schemaA).filter((s) => s !== xcol);
   if (!signals.length) return auto || toast("比較する信号を1つ以上選択してください", "error");
 
   const bId = $("#tc-dataset-b").value;
@@ -358,6 +491,9 @@ function renderOverlay(results, signals, xcol, mode) {
     hovermode: "x unified",
     margin: { l: 64, r: 20, t: results.length > 1 ? 34 : 24, b: 44 },
     annotations: [],
+    // オフセットのスライド(再描画)ではズーム/パンを保持し、データセットや
+    // 信号を変えたときだけリセットする。
+    uirevision: results.map((r) => r.id).join("|") + "|" + panels.join(","),
   });
   const gridStyle = layout.yaxis;
   delete layout.yaxis;
@@ -365,13 +501,18 @@ function renderOverlay(results, signals, xcol, mode) {
   const traces = [];
   panels.forEach((sig, i) => {
     const yaxis = i === 0 ? "y" : `y${i + 1}`;
-    results.forEach((run, j) => {
+    // 色は通常の時系列と同じく「信号ごと」。重ねる側(走行B)は薄く破線にして
+    // 基準(走行A・実線)と区別する。
+    const sigColor = colors[i % colors.length];
+    results.forEach((run) => {
       if (!(sig in run.res.data)) return;  // その走行に無い信号はスキップ
+      const overlaid = !run.primary;
       traces.push({
         type: "scattergl", mode: "lines", name: run.label,
         legendgroup: run.label, showlegend: results.length > 1 && i === 0,
         x: xValues(run, xcol, mode), y: run.res.data[sig], yaxis,
-        line: { width: 2, color: colors[j] },
+        line: { width: overlaid ? 1.8 : 2, color: sigColor, dash: overlaid ? "dash" : "solid" },
+        opacity: overlaid ? 0.55 : 1,
         hovertemplate: `%{y}<extra>${esc(run.label)} · ${esc(sig)}</extra>`,
       });
     });

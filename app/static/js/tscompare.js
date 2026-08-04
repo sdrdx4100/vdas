@@ -68,9 +68,66 @@ $("#tc-xmode").addEventListener("change", () => {
 });
 $("#tc-xref").addEventListener("change", tcAuto);
 $("#tc-xtime").addEventListener("change", tcAuto);
-$("#tc-offset").addEventListener("change", tcAuto);
 $("#tc-maxpoints").addEventListener("change", tcAuto);
 $("#tc-plot").addEventListener("click", () => plot());
+
+// ---------- Bオフセット (Aの上でスライド) ----------
+// オフセットは取得済みデータのX値をずらすだけなので、再取得せず再描画だけで
+// 済む。スライダーのドラッグ中も requestAnimationFrame で滑らかに追従させる。
+let lastPlot = null;   // { results, signals, xcol, mode } — オフセット再描画用キャッシュ
+let offsetRaf = 0;
+
+function scheduleOffsetRerender() {
+  if (offsetRaf) return;
+  offsetRaf = requestAnimationFrame(() => {
+    offsetRaf = 0;
+    if (lastPlot && lastPlot.mode !== "ref") {
+      renderMeta(lastPlot.results, lastPlot.xcol, lastPlot.mode);
+      renderChart("tc-chart",
+        () => renderOverlay(lastPlot.results, lastPlot.signals, lastPlot.xcol, lastPlot.mode));
+    } else {
+      tcAuto();  // まだ描画キャッシュが無ければ通常の再取得
+    }
+  });
+}
+
+function syncSliderFromNumber() {
+  const slider = $("#tc-offset-slider");
+  const value = +$("#tc-offset").value || 0;
+  slider.value = String(Math.max(+slider.min, Math.min(+slider.max, value)));
+}
+
+// A(基準)の数値時間軸の広がりからスライダーの範囲を決める。
+function updateOffsetRange(results, xcol) {
+  const slider = $("#tc-offset-slider");
+  const num = $("#tc-offset");
+  const ax = (results[0]?.res.data[xcol] || []).filter((v) => typeof v === "number");
+  const canSlide = ax.length >= 2;
+  slider.disabled = !canSlide;
+  num.disabled = !canSlide;
+  $("#tc-offset-wrap").title = canSlide
+    ? "Aの記録時間の範囲でBをスライドできます" : "スライドには数値の時間列が必要です";
+  if (!canSlide) return;
+  const span = Math.max(...ax) - Math.min(...ax);
+  slider.min = String(-span);
+  slider.max = String(span);
+  slider.step = String(span > 0 ? span / 1000 : 1);
+  syncSliderFromNumber();
+}
+
+$("#tc-offset-slider").addEventListener("input", () => {
+  $("#tc-offset").value = $("#tc-offset-slider").value;
+  scheduleOffsetRerender();
+});
+$("#tc-offset").addEventListener("input", () => {
+  syncSliderFromNumber();
+  scheduleOffsetRerender();
+});
+$("#tc-offset-reset").addEventListener("click", () => {
+  $("#tc-offset").value = "0";
+  $("#tc-offset-slider").value = "0";
+  scheduleOffsetRerender();
+});
 
 function applyXModeVisibility() {
   const ref = $("#tc-xmode").value === "ref";
@@ -243,6 +300,8 @@ async function plot(auto = false) {
     }
     if (req !== tcReq) return;
     if (!results.length) return;
+    lastPlot = { results, signals, xcol, mode };
+    if (mode !== "ref") updateOffsetRange(results, xcol);
     renderMeta(results, xcol, mode);
     renderChart("tc-chart", () => renderOverlay(results, signals, xcol, mode));
   } catch (e) {

@@ -583,9 +583,14 @@
         <label class="field" id="tc-xtime-wrap" hidden>時間列 (X)
           <select id="tc-xtime" style="min-width:160px;"></select>
         </label>
-        <label class="field" id="tc-offset-wrap" hidden>Bのオフセット
-          <input type="number" id="tc-offset" value="0" step="any" style="width:110px;">
-        </label>
+        <div class="field" id="tc-offset-wrap" hidden style="min-width:340px;">
+          <span>Bのオフセット (Aの上でスライド)</span>
+          <span style="display:flex; gap:8px; align-items:center;">
+            <input type="range" id="tc-offset-slider" min="-100" max="100" value="0" step="1" style="flex:1; min-width:150px;">
+            <input type="number" id="tc-offset" value="0" step="any" style="width:110px;">
+            <button class="btn subtle" id="tc-offset-reset" type="button" title="オフセットを0に戻す">0</button>
+          </span>
+        </div>
         <label class="field">最大表示点数
           <input type="number" id="tc-maxpoints" value="5000" min="100" max="50000" step="100" style="width:110px;">
         </label>
